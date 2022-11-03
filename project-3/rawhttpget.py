@@ -7,30 +7,51 @@ import sys
 _TEST_URL = "http://david.choffnes.com/classes/cs5700f22/project3.php"
 _BUFFER_SIZE = 65565  # Max possible TCP segment size.
 
-def filter_pckt(iph, host_addr, expected_addr, version, iph_length, protocol, s_addr, d_addr):
-    """TODO: Add a helper to filter for packets we want, i.e. address match, valid IP header, valid checksum.
-    Filter packets assuming IPv4 & TCP.
+def checksum_veri(ip_header):
+    """
+    Verify the IPv4 header checksum. Return True if correct; False otherwise.
+    Examples can be found in "https://en.wikipedia.org/wiki/Internet_checksum#cite_note-7"
+    """
+    iph = unpack('!HHHHHHHHHH' , ip_header)
+    checksum = sum(iph)
+    while checksum.bit_length() > 16:
+        moving_digits = checksum.bit_length()
+        carry_bit = checksum >> moving_digits  # Find the first digit of the checksum.
+        checksum += carry_bit
+    if ~checksum & 0xFFFF != 0x0: # Flip all bits. Correct if result is 0x0000 = 0x0.
+        return False
+    else:
+        return True
+
+def filter_pckt(ip_header, host_addr, expected_addr, version, iph_length, protocol, s_addr, d_addr):
+    """
+    A helper function to filter for packets we want, i.e. address match, valid IP header, valid checksum.
+    Filter packets assuming IPv4 & TCP. Return True if the packet is a wanted packet; False otherwise.
+    
+    Args:
+        ip_header: A string that represents the IP header part. Assume 20 bytes with no optional field.
+        host_addr: A string that represents the IP address of the local host. e.g. "10.0.0.98".
+        expected_addr: A string that represents the IP address of the remote server to get file from. e.g. "142.251.32.100".
+        version: A hex value that represents the version of the IP protocol. e.g. 0x4.
+        iph_length: A hex value that represents the IP header length. e.g. 0x5 * 4 = 0x14.
+        protocol: A hex value that represents the type of the protocol after the IP header. e.g. 0x06 for TCP.
+        s_addr: A string that represents the source address obtained from the IP header.
+        d_addr: A string that represents the destination address obtained from the IP header.
+    Returns:
+        A boolean value. True if the packet is a wanted packet; False otherwise.
     """
     # Verifies IP header format, including version, IP header length and protocol.
     if version != 0x4: # Assuming IPv4.
         return False
-    if iph_length != 0x5: # Assuming no optional field.
+    if iph_length != 0x14: # Assuming no optional field.
         return False
     if protocol != 0x06: # Assuming TCP.
         return False
     # Verifies s_addr and d_addr.
     if host_addr != d_addr or expected_addr != s_addr:
         return False
-    # Verifies checksum. Return False if verification failed.
-    checksum = 0
-    moving_digits = 16
-    while checksum >> moving_digits == 0x0 and moving_digits > 0: # Find the first digit of the checksum.
-        moving_digits -= 4
-    carry_bit = checksum >> moving_digits
-    checksum += carry_bit
-    if ~checksum != 0x0000: # Flip all bits. Correct if result is 0x0000.
-        return False
-    return True
+    # Verifies checksum. Return False if verification failed. True otherwise.
+    return checksum_veri(ip_header)
 
 def unpack_pckt(pckt, addr, expected_addr):
     """Unpacks an bytes object representing data received from the socket.
@@ -63,12 +84,12 @@ def unpack_pckt(pckt, addr, expected_addr):
     s_addr = socket.inet_ntoa(iph[8]) # Converts an IP address to dotted quad-string format.
     d_addr = socket.inet_ntoa(iph[9])
 
-    # TODO: Filter for packets we are interested in.
+    # Filter for packets we are interested in.
     # Get local host IP.
     host_addr = socket.gethostbyname(socket.gethostname)
     # Get server IP.
     expected_addr = socket.gethostbyname(_TEST_URL[7:]) # Do not include the "http://" part.
-    filter_flag = filter_pckt(iph, host_addr, expected_addr, version, iph_length, protocol, s_addr, d_addr)
+    filter_flag = filter_pckt(ip_header, host_addr, expected_addr, version, iph_length, protocol, s_addr, d_addr)
     print('Packet filter result based on IP header: ' + filter_flag)
 
     print('Version : ' + str(version) + ' IP Header Length : ' + str(ihl) + ' TTL : ' + str(ttl) + ' Protocol : ' + str(protocol) + ' Source Address : ' + str(s_addr) + ' Destination Address : ' + str(d_addr))
