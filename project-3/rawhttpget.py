@@ -5,12 +5,12 @@ Project 3: Raw Sockets
 from socket import *
 from struct import *
 import sys
-import argparse
 
 _TEST_URL = "http://david.choffnes.com/classes/cs5700f22/project3.php"
 _BUFFER_SIZE = 65565  # Max possible TCP segment size.
-_IP_ID = 54321 # Identification number for single IP connection.
-_TCP_SEQ_NUM = 454 # Non-random TCP sequence number for test purpose.
+_IP_ID = 54321  # Identification number for single IP connection.
+_TCP_SEQ_NUM = 454  # Non-random TCP sequence number for test purpose.
+_PORT_NUM = 80  # 80 for http, 443 for https.
 # useless notes:
 # use \xaa as a shorthand to transform 0xaa into strings. only 2 digits allowed.
 
@@ -310,20 +310,8 @@ def unpack_pckt(pckt, ip_id, expected_addr):
 
 
 def main():
-    # 80 for http connection. for https, use 443 instead.
-    local_port = 80
-    # Sets the commandline interface
-    parser = argparse.ArgumentParser(description="CS5700 Project 3")
-    # initiate a parser for the commandline command
-    parser.add_argument("URL", nargs=1)
-    # Contains a list of all arguments of the commandline command in args
-    args = parser.parse_args()
-    # Obtains URL using args.URL[0]
-    # Check if URL has the http part. Use as it is if not.
-    if args.URL[0][:7] == "http://":
-        url = args.URL[0][7:]
-    else:
-        url = args.URL[0]
+    args = sys.argv[1:]
+    url = args[0] if args else _TEST_URL  # Expects no or exactly one arg.
 
     # Creates a raw socket for sending packets.
     with socket(AF_INET, SOCK_RAW, IPPROTO_RAW) as send_s:
