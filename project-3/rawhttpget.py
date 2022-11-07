@@ -14,6 +14,7 @@ _TCP_SEQ_NUM = 454 # Non-random TCP sequence number for test purpose.
 # useless notes:
 # use \xaa as a shorthand to transform 0xaa into strings. only 2 digits allowed.
 
+# TODO: For the current commit, build a coherent receiver.
 
 def checksum_veri(ip_header):
     """
@@ -56,10 +57,13 @@ def checksum(msg):
 
 def filter_pckt(ip_header, expected_addr, addr, version, iph_length, id, ip_id, protocol, s_addr, d_addr):
     """
+    # TODO: filter not working properly. Result: source: 127.0.0.1, dest: 127.0.0.1, filter flag: False
+
+    Filter criteria: Src/Dest IP address, TCP protocol, TCP dest port number.
+
     A helper function to filter for packets we want, i.e. address match, valid IP header, valid checksum.
     Filter packets assuming IPv4 & TCP. Return True if the packet is a wanted packet; False otherwise.
-    # TODO: filter not working properly. Result: source: 127.0.0.1, dest: 127.0.0.1, filter flag: False
-    
+
     Args:
         ip_header: A string that represents the IP header part. Assume 20 bytes with no optional field.
         expected_addr: A string that represents the IP address of the local host. e.g. "10.0.0.98".
@@ -69,12 +73,14 @@ def filter_pckt(ip_header, expected_addr, addr, version, iph_length, id, ip_id, 
         protocol: A hex value that represents the type of the protocol after the IP header. e.g. 0x06 for TCP.
         s_addr: A string that represents the source address obtained from the IP header.
         d_addr: A string that represents the destination address obtained from the IP header.
+
     Returns:
         A boolean value. True if the packet is a wanted packet; False otherwise.
     """
     # Verifies IP header format, including version, IP header length and protocol.
     if version != 0x4: # Assuming IPv4.
         return False
+    # TODO: Is this a fair assumption?
     if iph_length != 0x14: # Assuming no optional field. 0x5 * 4 = 0x14.
         return False
     if id != ip_id: # Check id in ip_header equals to ip_id = _IP_ID.
@@ -210,7 +216,7 @@ def build_pckt(ip_header, tcp_header, data):
     return ip_header + tcp_header + data
 
 
-def unpack_pckt_ip(pckt, ip_id, addr, expected_addr):
+def unpack_pckt_ip(pckt):
     """
     Unpacks an bytes object representing data received from the socket. Return a list that contains a filter flag & the TCP header + data.
 
@@ -245,13 +251,14 @@ def unpack_pckt_ip(pckt, ip_id, addr, expected_addr):
     filter_flag = filter_pckt(ip_header, expected_addr, addr, version, iph_length, id, ip_id, protocol, s_addr, d_addr)
     print('Packet filter result based on IP header:', filter_flag)
 
-    print('Version : ' + str(version) + ' IP Header Length : ' + str(ihl) + ' TTL : ' + str(ttl) + ' Protocol : ' + str(protocol) + ' Source Address : ' + str(s_addr) + ' Destination Address : ' + str(d_addr))
+    # print('Version : ' + str(version) + ' IP Header Length : ' + str(ihl) + ' TTL : ' + str(ttl) + ' Protocol : ' + str(protocol) + ' Source Address : ' + str(s_addr) + ' Destination Address : ' + str(d_addr))
     ip_header_list = [version, ihl, ttl, protocol, s_addr, d_addr]
 
-    return [filter_flag, ip_header_list, pckt[iph_length:]]
+    return (iph_length, version, ihl, ttl, protocol, s_addr, d_addr)
+    # [filter_flag, ip_header_list, pckt[iph_length:]]
 
 
-def unpack_pckt_tcp(pckt_no_ip, addr, expected_addr):
+def unpack_pckt_tcp(pckt_no_ip):
     """
     Unpacks an bytes object representing data received from the socket, without the IP header.
     
@@ -288,6 +295,18 @@ def unpack_pckt_tcp(pckt_no_ip, addr, expected_addr):
     print('Data:', data)
 
     return [tcp_header_list, data]
+
+
+def unpack_pckt(pckt, ip_id, expected_addr):
+    """Unpacks an bytes object representing data received from the socket.
+    
+    This should serve as a top-level receiver function that calls other helpers.
+    """
+
+    (iph_length, version, ihl, ttl, protocol,
+    s_addr, d_addr) = unpack_pckt_ip(pckt)
+
+    unpack_pckt_tcp(pckt[iph_length:])
 
 
 def main():
