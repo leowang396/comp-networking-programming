@@ -9,7 +9,10 @@ import argparse
 
 _TEST_URL = "http://david.choffnes.com/classes/cs5700f22/project3.php"
 _BUFFER_SIZE = 65565  # Max possible TCP segment size.
-_IP_ID = 54321  # Identification number for single IP connection.
+_IP_ID = 54321 # Identification number for single IP connection.
+_TCP_SEQ_NUM = 454 # Non-random TCP sequence number for test purpose.
+# useless notes:
+# use \xaa as a shorthand to transform 0xaa into strings. only 2 digits allowed.
 
 
 def checksum_veri(ip_header):
@@ -64,7 +67,7 @@ def filter_pckt(ip_header, expected_addr, addr, version, iph_length, id, ip_id, 
 
 def ip_builder(ip_id, s_addr, d_addr):
     """
-    Build a IP header for packets to be sent.
+    Build & return a IP header for packets to be sent.
     
     Args:
         ip_id: An int representing the identification of this IP connection.
@@ -93,14 +96,78 @@ def ip_builder(ip_id, s_addr, d_addr):
     return ip_header
 
 
-def tcp_builder():
+def tcp_builder(source_port, dest_port, syn, ack, ack_num, window_size, s_addr, d_addr, data):
     """
-    # TODO: Build a TCP header for packets to be sent, including packets for 3-way handshakes and ACK packets after that.
+    Build & return a TCP header for packets to be sent, including packets for 3-way handshakes and ACK packets after that.
+    
+    Args:
+        source_port: An int representing the source end port number. The local port number listened by the sender. e.g. 1234
+        dest_port: An int representing the destination end port number. The remote port number listened by the receiver. e.g. 80 for http traffic.
+        syn: A boolean representing the SYN flag. True if SYN flag == 1;
+        ack: A boolean representing the ACK flag. True if ACK flag == 1;
+        ack_num: An int representing the ACK number in current packet. Calculated using seq_num of last packet ACKed + 1.
+        window_size: 
+
+        ip_id: An int representing the identification of this IP connection.
+        s_addr: A string of source IP address in dotted quad-string format.
+        d_addr: A string of dest IP address in dotted quad-string format.
+    Returns:
+        A string of binary values as the TCP header.
     """
-    pass
+    # TCP header fields
+    tcp_source_port = source_port # source port
+    tcp_dest_port = dest_port # destination port, 80 if http traffic
+    tcp_seq_num = _TCP_SEQ_NUM # TODO: use a random number here. for test purpose, use _TCP_SEQ_NUM instead.
+    tcp_ack_num = ack_num # should be the seq_num from last packet received + 1
+    tcp_doff = 5 # 4 bit field, size of tcp header, 5 * 4 = 20 bytes if no optional field
+    # TCP flags
+    tcp_fin = 0
+    if syn:
+        tcp_syn = 1
+    else:
+        tcp_syn = 0
+    tcp_rst = 0
+    tcp_psh = 0
+    if ack:
+        tcp_ack = 1
+    else:
+        tcp_ack = 0
+    tcp_urg = 0
+    # window size should be passed from outside by a congestion control function
+    tcp_window = socket.htons(window_size) # 5840 is the maximum allowed window size
+    # socket.htons() is for little-endian machines. See link below for examples.
+    # https://stackoverflow.com/questions/19207745/htons-function-in-socket-programing
+    # how to know if the machine is little-endian or not? See link below for command.
+    # https://serverfault.com/questions/163487/how-to-tell-if-a-linux-system-is-big-endian-or-little-endian
+    tcp_checksum = 0 # use checksum function to calculate it later
+    tcp_urg_ptr = 0
+
+    tcp_offset_res = (tcp_doff << 4) + 0 # 0 is for NS flag. Use 1 if NS flag is 1.
+    tcp_flags = tcp_fin + (tcp_syn << 1) + (tcp_rst << 2) + (tcp_psh <<3) + (tcp_ack << 4) + (tcp_urg << 5) # note that TCP flags are in reverse order
+
+    # the ! in the pack format string means network order
+    # Assume no option fields
+    tcp_header = pack('!HHLLBBHHH' , tcp_source_port, tcp_dest_port, tcp_seq_num, tcp_ack_num, tcp_offset_res, tcp_flags, tcp_window, tcp_check, tcp_urg_ptr)
+
+    # pseudo IP header fields for checksum calculation
+    source_address = socket.inet_aton(s_addr) # Converts an IP address from dotted quad-string format to 32-bit packed binary format.
+    dest_address = socket.inet_aton(d_addr)
+    placeholder = 0
+    protocol = socket.IPPROTO_TCP
+    tcp_length = len(tcp_header) + len(data)
+
+    psh = pack('!4s4sBBH', source_address, dest_address, placeholder, protocol, tcp_length)
+    psh = psh + tcp_header + data
+
+    tcp_checksum = checksum(psh)
+    print("TCP checksum result:", tcp_checksum)
+
+    # make the tcp header again and fill the correct checksum - remember checksum is NOT in network byte order
+    tcp_header = pack('!HHLLBBH' , tcp_source_port, tcp_dest_port, tcp_seq_num, tcp_ack_num, tcp_offset_res, tcp_flags, tcp_window) + pack('H' , tcp_checksum) + pack('!H' , tcp_urg_ptr)
+    return tcp_header
 
 
-def data_builder():
+def data_builder(empty, data):
     """
     # TODO: Build a HTTP data for packets to be sent, including packets for 3-way handshakes and ACK packets after that.
     """
@@ -202,7 +269,7 @@ def unpack_pckt_tcp(pckt_no_ip, addr, expected_addr):
 
 def main():
     # 80 for http connection. for https, use 443 instead.
-    port = 80
+    local_port = 80
     # Sets the commandline interface
     parser = argparse.ArgumentParser(description="CS5700 Project 3")
     # initiate a parser for the commandline command
@@ -210,6 +277,7 @@ def main():
     # Contains a list of all arguments of the commandline command in args
     args = parser.parse_args()
     # Obtains URL using args.URL[0]
+    if args.URL[0] 
 
     # Creates a raw socket for sending packets.
     with socket(AF_INET, SOCK_RAW, IPPROTO_RAW) as send_s:
