@@ -32,10 +32,33 @@ def checksum_veri(ip_header):
         return True
 
 
+def checksum(msg):
+    """
+    checksum functions needed for checksum calculation
+    # TODO: need to check the calculation logic
+    """
+    s = 0
+
+    # loop taking 2 characters at a time
+    for i in range(0, len(msg), 2):
+        # in python3, b"abc"[1] = 98. so no need for ord()
+        w = msg[i] + (msg[i+1] << 8)
+        s = s + w
+    
+    s = (s >> 16) + (s & 0xffff)
+    s = s + (s >> 16)
+    
+    # complement and mask to 4 byte short
+    s = ~s & 0xffff
+    
+    return s
+
+
 def filter_pckt(ip_header, expected_addr, addr, version, iph_length, id, ip_id, protocol, s_addr, d_addr):
     """
     A helper function to filter for packets we want, i.e. address match, valid IP header, valid checksum.
     Filter packets assuming IPv4 & TCP. Return True if the packet is a wanted packet; False otherwise.
+    # TODO: filter not working properly. Result: source: 127.0.0.1, dest: 127.0.0.1, filter flag: False
     
     Args:
         ip_header: A string that represents the IP header part. Assume 20 bytes with no optional field.
@@ -85,10 +108,10 @@ def ip_builder(ip_id, s_addr, d_addr):
     ip_tot_len = 0 # Kernel will fill the correct total length
     ip_frag_off = 0
     ip_ttl = 255
-    ip_proto = socket.IPPROTO_TCP
+    ip_proto = IPPROTO_TCP
     ip_check = 0 # Kernel will fill the correct checksum
-    ip_saddr = socket.inet_aton(s_addr) # Source IP address in 32-bit packed binary format.
-    ip_daddr = socket.inet_aton(d_addr) # Dest IP address in 32-bit packed binary format.
+    ip_saddr = inet_aton(s_addr) # Source IP address in 32-bit packed binary format.
+    ip_daddr = inet_aton(d_addr) # Dest IP address in 32-bit packed binary format.
     # Or socket.gethostbyname('www.google.com')
 
     # the ! in the pack format string means network order
@@ -134,7 +157,7 @@ def tcp_builder(source_port, dest_port, syn, ack, ack_num, window_size, s_addr, 
         tcp_ack = 0
     tcp_urg = 0
     # window size should be passed from outside by a congestion control function
-    tcp_window = socket.htons(window_size) # 5840 is the maximum allowed window size
+    tcp_window = htons(window_size) # 5840 is the maximum allowed window size
     # socket.htons() is for little-endian machines. See link below for examples.
     # https://stackoverflow.com/questions/19207745/htons-function-in-socket-programing
     # how to know if the machine is little-endian or not? See link below for command.
@@ -147,13 +170,13 @@ def tcp_builder(source_port, dest_port, syn, ack, ack_num, window_size, s_addr, 
 
     # the ! in the pack format string means network order
     # Assume no option fields
-    tcp_header = pack('!HHLLBBHHH' , tcp_source_port, tcp_dest_port, tcp_seq_num, tcp_ack_num, tcp_offset_res, tcp_flags, tcp_window, tcp_check, tcp_urg_ptr)
+    tcp_header = pack('!HHLLBBHHH' , tcp_source_port, tcp_dest_port, tcp_seq_num, tcp_ack_num, tcp_offset_res, tcp_flags, tcp_window, tcp_checksum, tcp_urg_ptr)
 
     # pseudo IP header fields for checksum calculation
-    source_address = socket.inet_aton(s_addr) # Converts an IP address from dotted quad-string format to 32-bit packed binary format.
-    dest_address = socket.inet_aton(d_addr)
+    source_address = inet_aton(s_addr) # Converts an IP address from dotted quad-string format to 32-bit packed binary format.
+    dest_address = inet_aton(d_addr)
     placeholder = 0
-    protocol = socket.IPPROTO_TCP
+    protocol = IPPROTO_TCP
     tcp_length = len(tcp_header) + len(data)
 
     psh = pack('!4s4sBBH', source_address, dest_address, placeholder, protocol, tcp_length)
@@ -215,12 +238,12 @@ def unpack_pckt_ip(pckt, ip_id, addr, expected_addr):
     id = iph[3]
     ttl = iph[5]
     protocol = iph[6]
-    s_addr = socket.inet_ntoa(iph[8]) # Converts an IP address to dotted quad-string format.
-    d_addr = socket.inet_ntoa(iph[9])
+    s_addr = inet_ntoa(iph[8]) # Converts an IP address to dotted quad-string format.
+    d_addr = inet_ntoa(iph[9])
 
     # Filter for packets we are interested in.
     filter_flag = filter_pckt(ip_header, expected_addr, addr, version, iph_length, id, ip_id, protocol, s_addr, d_addr)
-    print('Packet filter result based on IP header: ' + filter_flag)
+    print('Packet filter result based on IP header:', filter_flag)
 
     print('Version : ' + str(version) + ' IP Header Length : ' + str(ihl) + ' TTL : ' + str(ttl) + ' Protocol : ' + str(protocol) + ' Source Address : ' + str(s_addr) + ' Destination Address : ' + str(d_addr))
     ip_header_list = [version, ihl, ttl, protocol, s_addr, d_addr]
@@ -262,7 +285,7 @@ def unpack_pckt_tcp(pckt_no_ip, addr, expected_addr):
 
     # Gets data after the TCP header.
     data = pckt_no_ip[tcph_length * 4:]
-    print('Data : ' + data)
+    print('Data:', data)
 
     return [tcp_header_list, data]
 
@@ -277,7 +300,11 @@ def main():
     # Contains a list of all arguments of the commandline command in args
     args = parser.parse_args()
     # Obtains URL using args.URL[0]
-    if args.URL[0] 
+    # Check if URL has the http part. Use as it is if not.
+    if args.URL[0][:7] == "http://":
+        url = args.URL[0][7:]
+    else:
+        url = args.URL[0]
 
     # Creates a raw socket for sending packets.
     with socket(AF_INET, SOCK_RAW, IPPROTO_RAW) as send_s:
@@ -295,6 +322,16 @@ def main():
 
             # Binds receiving socket to IP interface.
             # recv_s.bind((gethostbyname(gethostname()), 0))
+            
+            # 1st SYN packet from local host
+            data = "".encode(encoding="utf-8")
+            tcp_header = tcp_builder(1107, 80, True, False, 0, 5840, gethostbyname(gethostname()), gethostbyname(_TEST_URL[7:25]), data)
+            ip_header = ip_builder(_IP_ID, gethostbyname(gethostname()), gethostbyname(_TEST_URL[7:25]))
+            packet = build_pckt(ip_header, tcp_header, data)
+            try:
+                send_s.send(packet)
+            except:
+                print("Error: Failed to send 1st SYN packet in the 3-way handshake.")
 
             counter = 1
             while True:
@@ -305,9 +342,11 @@ def main():
                 filter_flag = False
                 while not filter_flag: # Drop the packet if filter_flag is False.
                     packet, addr = recv_s.recvfrom(_BUFFER_SIZE)
-                    addr = socket.gethostbyname(_TEST_URL[7:]) # Do not include the "http://" part.
-                    expected_addr = socket.gethostbyname(socket.gethostname) # Get local host IP.
-                    filter_flag, ip_header_list, pckt_no_ip = unpack_pckt_ip(pckt, _IP_ID, addr, expected_addr)
+                    # TODO: need to fix the following line.
+                    # addr = socket.gethostbyname(_TEST_URL[7:]) # Do not include the "http://" part.
+                    expected_addr = gethostbyname(gethostname()) # Get local host IP.
+                    filter_flag, ip_header_list, pckt_no_ip = unpack_pckt_ip(packet, _IP_ID, addr, expected_addr)
+                    print(packet[:20])
                 counter += 1
     return
 
