@@ -5,6 +5,7 @@ Project 3: Raw Sockets
 from socket import *
 from struct import *
 import sys
+import argparse
 
 _TEST_URL = "http://david.choffnes.com/classes/cs5700f22/project3.php"
 _BUFFER_SIZE = 65565  # Max possible TCP segment size.
@@ -200,6 +201,16 @@ def unpack_pckt_tcp(pckt_no_ip, addr, expected_addr):
 
 
 def main():
+    # 80 for http connection. for https, use 443 instead.
+    port = 80
+    # Sets the commandline interface
+    parser = argparse.ArgumentParser(description="CS5700 Project 3")
+    # initiate a parser for the commandline command
+    parser.add_argument("URL", nargs=1)
+    # Contains a list of all arguments of the commandline command in args
+    args = parser.parse_args()
+    # Obtains URL using args.URL[0]
+
     # Creates a raw socket for sending packets.
     with socket(AF_INET, SOCK_RAW, IPPROTO_RAW) as send_s:
         if (send_s == -1):
