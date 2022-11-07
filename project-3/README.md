@@ -40,3 +40,9 @@ should try start to make packets first
 2 get SYC back ACK number 0 to some random number (say 8000 or 9000)  
 3 flags in the tcp header  
 4 complete the tcp header  
+
+
+Questions for TA:
+1. Can we assume IPv4 and no IPv6 packets? Assumptions made at:
+    inet_ntoa()
+    gethostbyname()
