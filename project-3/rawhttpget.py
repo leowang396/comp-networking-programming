@@ -12,6 +12,7 @@ _BUFFER_SIZE = 65565  # Max possible TCP segment size.
 _IP_ID = 0xd431 # Identification number for single IP connection. 54321 = 0xd431 for test.
 _TCP_SEQ_NUM = 454  # Non-random TCP sequence number for test purpose.
 _PORT_NUM = 80  # 80 for http, 443 for https.
+_TCP_PROTOCOL_ID = 6  # TCP protocol ID in IP header.
 # useless notes:
 # use \xaa as a shorthand to transform 0xaa into strings. only 2 digits allowed.
 # 0x follows number, means HEX number.
@@ -279,16 +280,14 @@ def unpack_pckt_ip(pckt):
 
 
 def unpack_pckt_tcp(pckt_no_ip):
-    """
-    Unpacks an bytes object representing data received from the socket, without the IP header.
-    Defensively unpacks a data packet to retrieve the IP header, TCP header, 
-    and data payload information. Leverages the `unpack` function from the 
-    `struct` library.
-    # TODO: Current version assumes IPv4, the assignment packet might be IPv6 as well.
+    """Unpacks TCP header of an bytes object.
+    
+    Defensively unpacks a data packet to retrieve the TCP header information. 
+    Leverages the `unpack` function from the `struct` library.
+
     Args:
-        pckt_no_ip: A bytes object representing data packet received without the IP header.
-        addr: Address of the remote socket sending data.
-        expected_addr: Address that the client sent data to.
+        pckt_no_ip: A bytes object of data packet after truncating IP header.
+
     Returns:
         A list that contains a TCP header tuple.
     """
@@ -304,36 +303,13 @@ def unpack_pckt_tcp(pckt_no_ip):
     tcph_length = doff_reserved >> 4
     tcph_length *= 4 # Use same unit as the iph_length in IP header.
     
-    print('Source Port : ' + str(source_port) + ' Dest Port : ' + str(dest_port) + ' Sequence Number : ' + str(sequence) + ' Acknowledgement : ' + str(acknowledgement) + ' TCP header length : ' + str(tcph_length))
+    # print('Source Port : ' + str(source_port) + ' Dest Port : ' + str(dest_port) + ' Sequence Number : ' + str(sequence) + ' Acknowledgement : ' + str(acknowledgement) + ' TCP header length : ' + str(tcph_length))
+    # tcp_header_list = [source_port, dest_port, sequence, acknowledgement, tcph_length]
 
-    return (source_port, dest_port, sequence, acknowledgement, tcph_length)
-
-
-def unpack_raw_http(pckt, remote_hostname):
-    """
-    Unpacks an bytes object representing HTTP data received from raw socket.
-    This should serve as a top-level receiver function that calls other helpers.
-    """
-    # IP-level unpacking.
-
-    ip_header_tuple = unpack_pckt_ip(pckt)
-    # (iph_length, version, ihl, ttl, protocol, s_addr, d_addr)
-
-    # IP-level filter for packets for this app.
-    if (ip_header_tuple[5] != gethostbyname(remote_hostname)
-    or ip_header_tuple[6] != gethostbyname(gethostname())):
-        raise FilterRejectException
-
-    # TCP-level unpacking.
-    tcp_header_tuple = unpack_pckt_tcp(pckt[iph_length:])
-    # (source_port, dest_port, sequence, acknowledgement, tcph_length)
-
-    # TODO: Add TCP-level unpacking and filter.
     # Gets data after the TCP header.
-    data = pckt_no_ip[tcph_length:]
-    print('Data:', data)
+    data = pckt_no_ip[tcph_length * 4:]
 
-    return (ip_header_tuple, tcp_header_tuple, data)
+    return (tcph_length, sequence, acknowledgement, source_port, dest_port)
 
 
 # Filter criteria: Src/Dest IP address, TCP protocol, TCP dest port number.
@@ -368,6 +344,26 @@ def unpack_raw_http(pckt, remote_hostname):
         return False
     # Verifies IP header checksum. Return False if verification failed. True otherwise.
     return checksum_veri(ip_header)
+
+
+def unpack_raw_http(pckt, remote_hostname):
+    """Unpacks an bytes object representing HTTP data received from raw socket.
+    
+    This should serve as a top-level receiver function that calls other helpers.
+    """
+
+    # IP-level unpacking.
+    (iph_length, version, ihl, ttl, protocol,
+    s_addr, d_addr) = unpack_pckt_ip(pckt)
+
+    # IP-level filter for packets for this app.
+    if (s_addr != socket.gethostbyname(remote_hostname)
+    or d_addr != socket.gethostbyname(socket.gethostname())):
+        raise FilterRejectException
+
+    unpack_pckt_tcp(pckt[iph_length:])
+
+    # TODO: Add TCP-level unpacking and filter.
 
 
 def main():
@@ -414,29 +410,29 @@ def main():
             # time_out_time = time.time() + 180
 
             counter = 1  # For debugging only.
-            failure_flag = False
-            while not failure_flag:
+            while True:
+                packet, addr = recv_s.recvfrom(_BUFFER_SIZE)
+                
+                # TODO: How to ensure complete packets are received?
+                # This seems no guaranteed for TCP, but the tutorial seems to assume it anyway.
+                # https://stackoverflow.com/questions/67509709/is-recvbufsize-guaranteed-to-receive-all-the-data-if-sended-data-is-smaller-th
+
+                # filter_flag = False
+                # while not filter_flag: # Drop the packet if filter_flag is False.
+                # addr = socket.gethostbyname(_TEST_URL[7:]) # Do not include the "http://" part.
+                # expected_addr = gethostbyname(gethostname()) # Get local host IP.
                 try:
-                    # TODO: need to understand what is this index for.
-                    # addr is a IP addrs string in dotted quad-string format.
-                    (packet, (addr, index)) = recv_s.recvfrom(_BUFFER_SIZE)
-                    # TODO: How to ensure complete packets are received?
-                    # This seems no guaranteed for TCP, but the tutorial seems to assume it anyway.
-                    # https://stackoverflow.com/questions/67509709/is-recvbufsize-guaranteed-to-receive-all-the-data-if-sended-data-is-smaller-th
-                    try:
-                        (ip_header_tuple, tcp_header_tuple, data) = unpack_raw_http(packet, url_hostname)
-                        print("Packet #" + str(counter) + ":")
-                        counter += 1
-                    # Checks if the packet is intended for other processes.
-                    except FilterRejectException:
-                        pass
-                    # Checks if a packet intended for our app is illegal.
-                    except:
-                        print("Error: Illegal response received!")
-                        recv_s.close() # close receiver for test purpose.
-                except:
-                    print("Error: Failed to receive packet from the URL.")
-                    failure_flag = True
+                    filter_flag, ip_header_list, pckt_no_ip = unpack_raw_http(packet, parsed_url.hostname, send_s.getsockname()[1])
+                    print("Packet #" + str(counter) + ":")
+                    counter += 1
+                # Checks if the packet is intended for other processes.
+                except FilterRejectException:
+                    pass
+                # Checks if a packet intended for our app is illegal.
+                # TODO: Add such checks.
+                except Exception as e:
+                    print(e)
+                    print("Error: Illegal response received!")
     return
 
 
