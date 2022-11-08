@@ -27,15 +27,6 @@ class FilterRejectException(Exception):
     pass
 
 
-def int_to_hex(int_to_hex, digits):
-    """
-    convert 0x65 into b'e' if digits = 2
-    """
-    binary_list = bytes(range(pow(2, digits)))
-    # format = '%0' + str(digits) + 'x'
-    return binary_list[int_to_hex:int_to_hex + 1]
-
-
 def checksum(msg):
     """
     checksum functions needed for checksum calculation
