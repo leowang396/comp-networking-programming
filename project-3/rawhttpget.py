@@ -287,7 +287,6 @@ def unpack_pckt_ip(pckt):
     return (iph_length, version, ihl, id, ttl, protocol, s_addr, d_addr)
 
 
-# Filter criteria: Src/Dest IP address, TCP protocol, TCP dest port number.
 def unpack_pckt_tcp(pckt_no_ip):
     """Unpacks TCP header of an bytes object.
     
@@ -340,6 +339,52 @@ def unpack_raw_http(pckt, remote_hostname, app_port_num):
     return pckt[(iph_length + tcph_length):]
 
 
+def tear_down_tcp(sends, recvs, remote_hostname):
+    pass
+
+
+def set_up_tcp(sends, recvs, remote_hostname):
+    # 1st SYN packet from local host. Use _TEST_URL for test purpose.
+    data = "".encode(encoding="utf-8")
+    tcp_header = tcp_builder(1107, 80, True, False, 0, 5840, socket.gethostbyname(socket.gethostname()), socket.gethostbyname(url_hostname), data)
+    print("TCP header:", tcp_header)
+    # TODO: use len(tcp_header) + len(data) later after finished TCP header debugging.
+    ip_header = ip_builder(_IP_ID, 20 + len(data), socket.IPPROTO_TCP, socket.gethostbyname(socket.gethostname()), socket.gethostbyname(url_hostname))
+    print("IP header:", ip_header)
+    packet = build_pckt(ip_header, tcp_header, data)
+    # TODO: SYN sending failed. Checking now.
+    try:
+        sends.send(packet)
+        print("Send 1st SYN packet successfully!")
+    except:
+        print("Error: Failed to send 1st SYN packet in the 3-way handshake.")
+        sends.close()
+
+
+def raw_http_get(sends, recvs, remote_hostname):
+    counter = 1  # DEBUG
+    while True:
+        packet, addr = recv_s.recvfrom(_BUFFER_SIZE)
+        
+        # TODO: How to ensure complete packets are received?
+        # This seems no guaranteed for TCP, but the tutorial seems to assume it anyway.
+        # https://stackoverflow.com/questions/67509709/is-recvbufsize-guaranteed-to-receive-all-the-data-if-sended-data-is-smaller-th
+
+        try:
+            filter_flag, ip_header_list, pckt_no_ip = unpack_raw_http(packet, parsed_url.hostname, send_s.getsockname()[1])
+
+            print("Packet #" + str(counter) + ":")  # DEBUG
+            counter += 1
+        # Checks if the packet is intended for other processes.
+        except FilterRejectException:
+            pass
+        # Checks if a packet intended for our app is illegal.
+        # TODO: Add such checks.
+        except Exception as e:
+            print("Error: Illegal response received!")
+            print(e)
+
+
 def main():
     args = sys.argv[1:]
     url = args[0] if args else _TEST_URL  # Expects no or exactly one arg.
@@ -370,47 +415,19 @@ def main():
 
             # Binds receiving socket to IP interface.
             # recv_s.bind((gethostbyname(gethostname()), 0))
-            
-            # 1st SYN packet from local host. Use _TEST_URL for test purpose.
-            data = "".encode(encoding="utf-8")
-            tcp_header = tcp_builder(1107, 80, True, False, 0, 5840, socket.gethostbyname(socket.gethostname()), socket.gethostbyname(url_hostname), data)
-            print("TCP header:", tcp_header)
-            # TODO: use len(tcp_header) + len(data) later after finished TCP header debugging.
-            ip_header = ip_builder(_IP_ID, 20 + len(data), socket.IPPROTO_TCP, socket.gethostbyname(socket.gethostname()), socket.gethostbyname(url_hostname))
-            print("IP header:", ip_header)
-            packet = build_pckt(ip_header, tcp_header, data)
-            # TODO: SYN sending failed. Checking now.
-            # try:
-            #     send_s.send(packet)
-            #     print("Send 1st SYN packet successfully!")
-            # except:
-            #     print("Error: Failed to send 1st SYN packet in the 3-way handshake.")
-            #     send_s.close()
 
-            # TODO: Add a 3-min timer for server response.
+            # TODO: Add a 3-min timer for all receiving operations.
             # time_out_time = time.time() + 180
 
-            counter = 1  # DEBUG
-            while True:
-                packet, addr = recv_s.recvfrom(_BUFFER_SIZE)
-                
-                # TODO: How to ensure complete packets are received?
-                # This seems no guaranteed for TCP, but the tutorial seems to assume it anyway.
-                # https://stackoverflow.com/questions/67509709/is-recvbufsize-guaranteed-to-receive-all-the-data-if-sended-data-is-smaller-th
+            (send_seq, recv_seq) = set_up_tcp(send_s, recv_s, url_hostname)
 
-                try:
-                    filter_flag, ip_header_list, pckt_no_ip = unpack_raw_http(packet, parsed_url.hostname, send_s.getsockname()[1])
+            (raw_http_get_res, send_seq, recv_seq) = raw_http_get(send_s, 
+            recv_s, url_hostname, send_seq, recv_seq)
 
-                    print("Packet #" + str(counter) + ":")  # DEBUG
-                    counter += 1
-                # Checks if the packet is intended for other processes.
-                except FilterRejectException:
-                    pass
-                # Checks if a packet intended for our app is illegal.
-                # TODO: Add such checks.
-                except Exception as e:
-                    print(e)
-                    print("Error: Illegal response received!")
+            # TODO: Convert 'raw_http_get_res' into HTML and save it.
+
+            tear_down_tcp(send_s, recv_s, url_hostname, send_seq, recv_seq)
+    
     return
 
 
