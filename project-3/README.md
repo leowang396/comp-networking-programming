@@ -43,6 +43,5 @@ should try start to make packets first
 
 
 Questions for TA:
-1. Can we assume IPv4 and no IPv6 packets? Assumptions made at:
-    inet_ntoa()
-    gethostbyname()
+1. Can we use the OS functionality to fill up checksum?
+2. Can we assume each recv() get one and only one full packet?
