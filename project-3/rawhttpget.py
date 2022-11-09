@@ -7,6 +7,7 @@ import socket
 import struct
 from urllib.parse import urlparse
 
+
 _TEST_URL = "http://david.choffnes.com/classes/cs5700f22/project3.php"
 _BUFFER_SIZE = 65565  # Max possible TCP segment size.
 _IP_ID = 0xd431 # Identification number for single IP connection. 54321 = 0xd431 for test.
@@ -23,6 +24,7 @@ class FilterRejectException(Exception):
     Raised when received packet is not for raw HTTP GET.
     """
     pass
+    
 
 
 def checksum(msg):
@@ -90,11 +92,11 @@ def ip_builder(ip_id, data_length, protocol, s_addr, d_addr):
     ip_ttl = 0xff # 255
     ip_proto = protocol
     ip_check = 0 # kernel will fill the correct checksum
-    ip_saddr = inet_aton(s_addr)
-    ip_daddr = inet_aton(d_addr)
+    ip_saddr = socket.inet_aton(s_addr)
+    ip_daddr = socket.inet_aton(d_addr)
 
     # the ! in the pack format string means network order
-    ip_header = pack('!BBHHHBBH4s4s' , ip_ver_ihl, ip_tos, ip_tot_len, ip_id, ip_frag_off, ip_ttl, ip_proto, ip_check, ip_saddr, ip_daddr)
+    ip_header = struct.pack('!BBHHHBBH4s4s' , ip_ver_ihl, ip_tos, ip_tot_len, ip_id, ip_frag_off, ip_ttl, ip_proto, ip_check, ip_saddr, ip_daddr)
 
     # print("IP header checksum", hex(checksum(ip_header)))
     # print("Source IP address:", s_addr)
@@ -151,7 +153,7 @@ def tcp_builder(source_port, dest_port, syn, ack, ack_num, window_size, s_addr, 
     tcp_flags = tcp_fin + (tcp_syn << 1) + (tcp_rst << 2) + (tcp_psh << 3) + (tcp_ack << 4) + (tcp_urg << 5) # note that TCP flags are in reverse order
 
     # the ! in the pack format string means network order
-    tcp_header = pack('!HHLLBBHHH' , tcp_source_port, tcp_dest_port, tcp_seq_num, tcp_ack_num, tcp_offset_res, tcp_flags, tcp_window, tcp_checksum, tcp_urg_ptr)
+    tcp_header = struct.pack('!HHLLBBHHH' , tcp_source_port, tcp_dest_port, tcp_seq_num, tcp_ack_num, tcp_offset_res, tcp_flags, tcp_window, tcp_checksum, tcp_urg_ptr)
 
     # pseudo IP header fields for checksum calculation
     source_address = socket.inet_aton(s_addr) # Converts an IP address from dotted quad-string format to 32-bit packed binary format.
@@ -270,31 +272,31 @@ def set_up_tcp(sends, recvs, remote_hostname):
     # 1st SYN packet from local host. Use _TEST_URL for test purpose.
     data = "".encode(encoding="utf-8")
     # "10.0.0.98" is local IP address got by Wireshark. Somehow this is different than get method result
-    tcp_header = tcp_builder(_LOCAL_PORT_NUM, 80, True, False, 0, 5840, gethostbyname(gethostname()), gethostbyname(url_hostname), data)
+    tcp_header = tcp_builder(1107, 80, True, False, 0, 5840, socket.gethostbyname(socket.gethostname()), socket.gethostbyname(remote_hostname), data)
     # print("TCP header:", tcp_header)
-    ip_header = ip_builder(_IP_ID, 20 + len(data), IPPROTO_TCP, gethostbyname(gethostname()), gethostbyname(url_hostname))
+    ip_header = ip_builder(_IP_ID, 20 + len(data), socket.IPPROTO_TCP, socket.gethostbyname(socket.gethostname()), socket.gethostbyname(remote_hostname))
     # print("IP header:", ip_header)
-    packet = build_pckt(ip_header, tcp_header, data)
+    packet = ip_header + tcp_header + data
     # SYN sent successfully
     try:
-        send_s.sendto(packet, (gethostbyname(url_hostname), 0))
+        sends.sendto(packet, (socket.gethostbyname(remote_hostname), 0))
         print("Send 1st SYN packet successfully!")
     except:
         print("Error: Failed to send 1st SYN packet in the 3-way handshake.")
-        send_s.close()
+        sends.close()
 
 
 def raw_http_get(sends, recvs, remote_hostname):
     counter = 1  # DEBUG
     while True:
-        packet, addr = recv_s.recvfrom(_BUFFER_SIZE)
+        packet, addr = recvs.recvfrom(_BUFFER_SIZE)
         
         # TODO: How to ensure complete packets are received?
         # This seems no guaranteed for TCP, but the tutorial seems to assume it anyway.
         # https://stackoverflow.com/questions/67509709/is-recvbufsize-guaranteed-to-receive-all-the-data-if-sended-data-is-smaller-th
 
         try:
-            filter_flag, ip_header_list, pckt_no_ip = unpack_raw_http(packet, parsed_url.hostname, send_s.getsockname()[1])
+            filter_flag, ip_header_list, pckt_no_ip = unpack_raw_http(packet, remote_hostname, sends.getsockname()[1])
 
             print("Packet #" + str(counter) + ":")  # DEBUG
             counter += 1
