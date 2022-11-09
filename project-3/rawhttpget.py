@@ -71,12 +71,11 @@ def checksum_veri(ip_header):
         return True
 
 
-def ip_builder(ip_id, data_length, protocol, s_addr, d_addr):
+def ip_builder(ip_id, protocol, s_addr, d_addr):
     """
     Build & return a IP header for packets to be sent.
     Args:
         ip_id: An int representing the identification of this IP connection.
-        data_length: int for length of data other than IP header part.
         protocol: int for protocol number. 6 as TCP.
         s_addr: A string of source IP address in dotted quad-string format.
         d_addr: A string of dest IP address in dotted quad-string format.
@@ -140,7 +139,7 @@ def tcp_builder(source_port, dest_port, syn, ack, ack_num, window_size, s_addr, 
     else:
         tcp_ack = 0
     tcp_urg = 0
-    # window size should be passed from outside by a congestion control function
+    # use window_size as advertiesed window_size
     tcp_window = socket.htons(window_size) # 5840 is the maximum allowed window size
     # socket.htons() is for little-endian machines. See link below for examples.
     # https://stackoverflow.com/questions/19207745/htons-function-in-socket-programing
@@ -150,7 +149,8 @@ def tcp_builder(source_port, dest_port, syn, ack, ack_num, window_size, s_addr, 
     tcp_urg_ptr = 0
 
     tcp_offset_res = (tcp_doff << 4) + 0 # 0 is for NS flag. Use 1 if NS flag is 1.
-    tcp_flags = tcp_fin + (tcp_syn << 1) + (tcp_rst << 2) + (tcp_psh << 3) + (tcp_ack << 4) + (tcp_urg << 5) # note that TCP flags are in reverse order
+    # TCP flags are in reverse order
+    tcp_flags = tcp_fin + (tcp_syn << 1) + (tcp_rst << 2) + (tcp_psh << 3) + (tcp_ack << 4) + (tcp_urg << 5)
 
     # the ! in the pack format string means network order
     tcp_header = struct.pack('!HHLLBBHHH' , tcp_source_port, tcp_dest_port, tcp_seq_num, tcp_ack_num, tcp_offset_res, tcp_flags, tcp_window, tcp_checksum, tcp_urg_ptr)
@@ -162,10 +162,10 @@ def tcp_builder(source_port, dest_port, syn, ack, ack_num, window_size, s_addr, 
     protocol = socket.IPPROTO_TCP
     tcp_length = len(tcp_header) + len(data)
 
-    psh = struct.pack('!4s4sBBH', source_address, dest_address, placeholder, protocol, tcp_length)
-    psh = psh + tcp_header + data
+    pih = struct.pack('!4s4sBBH', source_address, dest_address, placeholder, protocol, tcp_length)
+    pih = pih + tcp_header + data
 
-    tcp_checksum = checksum(psh)
+    tcp_checksum = checksum(pih)
     # print("TCP checksum result:", tcp_checksum)
 
     # make the tcp header again and fill the correct checksum - remember checksum is NOT in network byte order
@@ -190,7 +190,8 @@ def unpack_pckt_ip(pckt):
     # Unpacks the first 20 bytes for the IP header.
     ip_header = pckt[0:20]
     iph = struct.unpack('!BBHHHBBH4s4s' , ip_header)
-    # elements in iph: 0 is version & IHL; 1 is DSCP & ECN; 2 is total length; 3 is IP id; 4 is flags & frag-offset;
+    # elements in iph:
+    # 0 is version & IHL; 1 is DSCP & ECN; 2 is total length; 3 is IP id; 4 is flags & frag-offset;
     # 5 is TTL; 6 is protocol; 7 is IP header checksum; 8 is source IP address; 9 is dest IP address;
 
     version_ihl = iph[0]
@@ -227,6 +228,10 @@ def unpack_pckt_tcp(pckt_no_ip):
     # Unpacks the 20 bytes after IP header for the TCP header.
     tcp_header = pckt_no_ip[0:20]
     tcph = struct.unpack('!HHLLBBHHH' , tcp_header)
+    # elements in tcph:
+    # 0 is source port; 1 is dest port; 2 is seq num; 3 is ack num; 4 is offset;
+    # 5 is reserved & NS flag; 6 is flags without NS; 7 is advertised window size;
+    # 8 is checksum; 9 is urgent pointer;
     
     source_port = tcph[0]
     dest_port = tcph[1]
@@ -235,8 +240,18 @@ def unpack_pckt_tcp(pckt_no_ip):
     doff_reserved = tcph[4]
     tcph_length = doff_reserved >> 4
     tcph_length *= 4  # Use same unit as the iph_length in IP header.
+    tcp_flags = tcph[6]
+    # flag order: urg, ack, psh, rst, syn, fin
+    ack_flag = False
+    syn_flag = False
+    if tcp_flags == 0x012:
+        ack_flag = True
+        syn_flag = True
+    elif tcp_flags == 0x016:
+        ack_flag = True
+        syn_flag = False
 
-    return (tcph_length, sequence, acknowledgement, source_port, dest_port)
+    return (tcph_length, sequence, acknowledgement, source_port, dest_port, ack_flag, syn_flag)
 
 
 def unpack_raw_http(pckt, remote_hostname, app_port_num):
@@ -245,69 +260,59 @@ def unpack_raw_http(pckt, remote_hostname, app_port_num):
     This should serve as a top-level receiver function that calls other helpers.
     """
     # IP-level unpacking.
-    (iph_length, version, ihl, id, ttl, protocol,
-    s_addr, d_addr) = unpack_pckt_ip(pckt)
+    #(iph_length, version, ihl, id, ttl, protocol, s_addr, d_addr)
+    ip_header_tuple = unpack_pckt_ip(pckt)
 
     # IP-level filter for packets for this app.
-    if (s_addr != socket.gethostbyname(remote_hostname)
-    or d_addr != socket.gethostbyname(socket.gethostname())):
-        raise FilterRejectException
+    # if (ip_header_tuple[6] != socket.gethostbyname(remote_hostname)
+    # or ip_header_tuple[7] != socket.gethostbyname(socket.gethostname())):
+        # raise FilterRejectException
 
     # TCP-level unpacking.
-    (tcph_length, sequence, acknowledgement,
-    source_port, dest_port) = unpack_pckt_tcp(pckt[iph_length:])
+    #(tcph_length, sequence, acknowledgement, source_port, dest_port, ack_flag, syn_flag)
+    tcp_header_tuple = unpack_pckt_tcp(pckt[(ip_header_tuple[0]):])
 
     # TCP-level filter for packets for this app.
-    if app_port_num != dest_port:
-        raise FilterRejectException
+    # if app_port_num != tcp_header_tuple[4]:
+        # raise FilterRejectException
 
-    return pckt[(iph_length + tcph_length):]
+    return (ip_header_tuple, tcp_header_tuple, pckt[(ip_header_tuple[0] + tcp_header_tuple[0]):])
 
 
 def tear_down_tcp(sends, recvs, remote_hostname):
-    pass
+    # get http header and http data?
+    http_header = b''
+    http_data = b''
+    return (http_header, http_data)
 
 
 def set_up_tcp(sends, recvs, remote_hostname):
-    # 1st SYN packet from local host. Use _TEST_URL for test purpose.
-    data = "".encode(encoding="utf-8")
-    # "10.0.0.98" is local IP address got by Wireshark. Somehow this is different than get method result
-    tcp_header = tcp_builder(1107, 80, True, False, 0, 5840, socket.gethostbyname(socket.gethostname()), socket.gethostbyname(remote_hostname), data)
-    # print("TCP header:", tcp_header)
-    ip_header = ip_builder(_IP_ID, 20 + len(data), socket.IPPROTO_TCP, socket.gethostbyname(socket.gethostname()), socket.gethostbyname(remote_hostname))
-    # print("IP header:", ip_header)
-    packet = ip_header + tcp_header + data
-    # SYN sent successfully
-    try:
-        sends.sendto(packet, (socket.gethostbyname(remote_hostname), 0))
-        print("Send 1st SYN packet successfully!")
-    except:
-        print("Error: Failed to send 1st SYN packet in the 3-way handshake.")
-        sends.close()
+    pass
 
 
 def raw_http_get(sends, recvs, remote_hostname):
-    counter = 1  # DEBUG
-    while True:
-        packet, addr = recvs.recvfrom(_BUFFER_SIZE)
-        
-        # TODO: How to ensure complete packets are received?
-        # This seems no guaranteed for TCP, but the tutorial seems to assume it anyway.
-        # https://stackoverflow.com/questions/67509709/is-recvbufsize-guaranteed-to-receive-all-the-data-if-sended-data-is-smaller-th
 
-        try:
-            filter_flag, ip_header_list, pckt_no_ip = unpack_raw_http(packet, remote_hostname, sends.getsockname()[1])
+    (packet, addr) = recvs.recvfrom(_BUFFER_SIZE)
+    # No fragments allowed in this project
+    # How to ensure complete packets are received?
+    # This seems no guaranteed for TCP, but the tutorial seems to assume it anyway.
+    # https://stackoverflow.com/questions/67509709/is-recvbufsize-guaranteed-to-receive-all-the-data-if-sended-data-is-smaller-th
 
-            print("Packet #" + str(counter) + ":")  # DEBUG
-            counter += 1
-        # Checks if the packet is intended for other processes.
-        except FilterRejectException:
-            pass
-        # Checks if a packet intended for our app is illegal.
-        # TODO: Add such checks.
-        except Exception as e:
-            print("Error: Illegal response received!")
-            print(e)
+    try:
+        (ip_header_tuple, tcp_header_tuple, http_pckt) = unpack_raw_http(packet, remote_hostname, sends.getsockname()[1])
+        print("Packet #" + 1 + ":")  # DEBUG
+
+    # Checks if the packet is intended for other processes.
+    except FilterRejectException:
+        pass
+    # Checks if a packet intended for our app is illegal.
+    # TODO: Add such checks.
+    except Exception as e:
+        print("Error: Illegal response received!")
+        print(e)
+
+    # TCP sequence number, TCP acknowledge number, TCP ACK flag, TCP SYN flag
+    return (tcp_header_tuple[1], tcp_header_tuple[2], tcp_header_tuple[5], tcp_header_tuple[6], http_pckt)
 
 
 def main():
@@ -341,17 +346,64 @@ def main():
             # Binds receiving socket to IP interface.
             # recv_s.bind((gethostbyname(gethostname()), 0))
 
+            # Set up TCP connection using 2 sockets, including:
+            # 1. Send SYN (TCP 3-way handshake)
+            # 2. Receive SYN/ACK (TCP 3-way handshake)
+            # 3. Send ACK (TCP 3-way handshake)
+            # Receive data packets and repest
+            # 4. Receive data packet
+            # 5. Send ACK
+
+            # fix TCP source port number for test
+            source_port = 1107
+            # 1st SYN packet from local host. Use _TEST_URL for test purpose.
+            data = "".encode(encoding="utf-8")
+            # local IP address obtained by Wireshark is different from gethostbyname(socket.gethostname())
+            # TODO: use sends.getsockname()[1] to replace socket.gethostbyname(socket.gethostname())
+            tcp_header = tcp_builder(source_port, 80, True, False, 0, 5840, socket.gethostbyname(socket.gethostname()), socket.gethostbyname(url_hostname), data)
+            # print("TCP header:", tcp_header)
+            ip_header = ip_builder(_IP_ID, socket.IPPROTO_TCP, socket.gethostbyname(socket.gethostname()), socket.gethostbyname(url_hostname))
+            # print("IP header:", ip_header)
+            packet = ip_header + tcp_header + data
+            # SYN sent successfully
+            try:
+                send_s.sendto(packet, (socket.gethostbyname(url_hostname), 0))
+                print("Send 1st SYN packet successfully!")
+            except:
+                print("Error: Failed to send 1st SYN packet in the 3-way handshake.")
+                send_s.close()
+    
+            # Receive SYN/ACK packet
+            try:
+                (packet, addr) = recv_s.recvfrom(_BUFFER_SIZE)
+                print(packet, addr)
+            except:
+                print("Error: Failed to receive 1st SYN/ACK packet in the 3-way handshake.")
+            # (ip_header_tuple, tcp_header_tuple, http_pckt) = unpack_raw_http(packet, remote_hostname, sends.getsockname()[1])
+            # (tcp_header_tuple[1], tcp_header_tuple[2], tcp_header_tuple[5], tcp_header_tuple[6], http_pckt)
+
+            # (sequence, acknowledge, ack_flag, syn_flag) = raw_http_get(sends, recvs, remote_hostname)
+            # TODO: use sequence number sent by tcp_builder later
+            # if (acknowledge == _TCP_SEQ_NUM + 1 and ack_flag == True and syn_flag == True):
+                # print("Receive 1st SYN/ACK packet successfully!")
+            # else:
+                # print("Error: Failed to receive 1st SYN/ACK packet in the 3-way handshake.")
+
+
+
+
+
             # TODO: Add a 3-min timer for all receiving operations.
             # time_out_time = time.time() + 180
 
-            (send_seq, recv_seq) = set_up_tcp(send_s, recv_s, url_hostname)
+            # (send_seq, recv_seq) = set_up_tcp(send_s, recv_s, url_hostname)
 
-            (raw_http_get_res, send_seq, recv_seq) = raw_http_get(send_s, 
-            recv_s, url_hostname, send_seq, recv_seq)
+            # (raw_http_get_res, send_seq, recv_seq) = raw_http_get(send_s, 
+            # recv_s, url_hostname, send_seq, recv_seq)
 
             # TODO: Convert 'raw_http_get_res' into HTML and save it.
 
-            tear_down_tcp(send_s, recv_s, url_hostname, send_seq, recv_seq)
+            # tear_down_tcp(send_s, recv_s, url_hostname, send_seq, recv_seq)
     
     return
 
