@@ -71,7 +71,7 @@ def checksum_veri(ip_header):
         return True
 
 
-def ip_builder(ip_id, protocol, s_addr, d_addr):
+def build_ip_head(ip_id, protocol, s_addr, d_addr):
     """
     Build & return a IP header for packets to be sent.
     Args:
@@ -98,7 +98,8 @@ def ip_builder(ip_id, protocol, s_addr, d_addr):
     ip_id, ip_frag_off, ip_ttl, protocol, ip_check, ip_saddr, ip_daddr)
 
 
-def tcp_builder(s_addr, d_addr, s_port, d_port, tcp_seq_num, tcp_ack_num, fin, syn, rst, psh, ack, urg, window_size, usr_data):
+def build_tcp_head(s_addr, d_addr, s_port, d_port, tcp_seq_num, tcp_ack_num,
+ fin, syn, rst, psh, ack, urg, window_size, usr_data):
     """
     Build & return a TCP header for packets to be sent, including packets for 3-way handshakes and ACK packets after that.
     Args:
@@ -147,7 +148,7 @@ def tcp_builder(s_addr, d_addr, s_port, d_port, tcp_seq_num, tcp_ack_num, fin, s
     return tcp_header
 
 
-def unpack_pckt_ip(pckt):
+def unpack_ip_head(pckt):
     """Unpacks an bytes object representing data received from the socket.
     
     Return a list of TCP header details. Raises a FilterRejectException if 
@@ -186,7 +187,7 @@ def unpack_pckt_ip(pckt):
     return (version, ihl, iph_length, id, ttl, protocol, s_addr, d_addr)
 
 
-def unpack_pckt_tcp(pckt_no_ip):
+def unpack_tcp_head(pckt_no_ip):
     """Unpacks TCP header of an bytes object.
     
     Defensively unpacks a data packet to retrieve the TCP header information. 
@@ -230,7 +231,7 @@ def unpack_raw_http(pckt, remote_hostname, local_addr, local_port_num):
     """
     # IP-level unpacking.
     (version, ihl, iph_length, ip_id, ttl, protocol,
-    s_addr, d_addr) = unpack_pckt_ip(pckt)
+    s_addr, d_addr) = unpack_ip_head(pckt)
     print("IP-level unpacking done!")
 
     # IP-level filter for packets for this app.
@@ -242,7 +243,7 @@ def unpack_raw_http(pckt, remote_hostname, local_addr, local_port_num):
     # TCP-level unpacking.
     (source_port, dest_port, sequence, acknowledgement, tcph_length,
     fin, syn, rst, psh, ack, urg,
-    adv_window, checksum) = unpack_pckt_tcp(pckt[iph_length:])
+    adv_window, checksum) = unpack_tcp_head(pckt[iph_length:])
     print("TCP-level unpacking done!")
 
     # TCP-level filter for packets for this app.
@@ -258,10 +259,10 @@ def unpack_raw_http(pckt, remote_hostname, local_addr, local_port_num):
 
 def pack_raw_http(s_addr, d_addr, s_port, ip_id, tcp_seq_num, tcp_ack_num,
     tcp_fin, tcp_syn, tcp_rst, tcp_psh, tcp_ack, tcp_urg, adv_window, data):
-    ip_header = ip_builder(ip_id, _TCP_PROTOCOL_ID, s_addr, d_addr)
+    ip_header = build_ip_head(ip_id, _TCP_PROTOCOL_ID, s_addr, d_addr)
 
     data = data.encode()
-    tcp_header = tcp_builder(s_addr, d_addr, s_port, _HTTP_PORT_NUM, 
+    tcp_header = build_tcp_head(s_addr, d_addr, s_port, _HTTP_PORT_NUM, 
     tcp_seq_num, tcp_ack_num, tcp_fin, tcp_syn, tcp_rst, tcp_psh, tcp_ack, 
     tcp_urg, adv_window, data)
     print("====================")
