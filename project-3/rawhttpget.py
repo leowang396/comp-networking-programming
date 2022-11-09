@@ -1,56 +1,307 @@
-"""Project 3: Raw Sockets
 """
-from socket import *
-from struct import *
+Project 3: Raw Sockets
+"""
 import sys
+import time
+import socket
+import struct
+from urllib.parse import urlparse
 
 _TEST_URL = "http://david.choffnes.com/classes/cs5700f22/project3.php"
 _BUFFER_SIZE = 65565  # Max possible TCP segment size.
+_IP_ID = 0xd431 # Identification number for single IP connection. 54321 = 0xd431 for test.
+_TCP_SEQ_NUM = 454  # Non-random TCP sequence number for test purpose.
+_PORT_NUM = 80  # 80 for http, 443 for https.
+_TCP_PROTOCOL_ID = 6  # TCP protocol ID in IP header.
+# useless notes:
+# use \xaa as a shorthand to transform 0xaa into strings. only 2 digits allowed.
+# 0x follows number, means HEX number.
+# \x follows number, means HEX ascii characters.
 
-def filter_pckt():
-    """TODO: Add a helper to filter for packets we want, i.e. address match, valid IP header, valid checksum.
+
+class FilterRejectException(Exception):
     """
-    return
+    Raised when received packet is not for raw HTTP GET.
+    """
+    pass
 
-def unpack_pckt(pckt, addr, expected_addr):
+
+def checksum(msg):
+    """
+    checksum functions needed for checksum calculation
+    # TODO: need to check the calculation logic
+    """
+    s = 0
+
+    # loop taking 2 characters at a time
+    for i in range(0, len(msg), 2):
+        # in python3, b"abc"[1] = 98. so no need for ord()
+        w = msg[i] + (msg[i+1] << 8)
+        s = s + w
+    
+    s = (s >> 16) + (s & 0xffff)
+    s = s + (s >> 16)
+    
+    # complement and mask to 4 byte short
+    s = ~s & 0xffff
+    
+    return s
+
+
+def checksum_veri(ip_header):
+    """
+    Verify the IPv4 header checksum. Return True if correct; False otherwise.
+    Examples can be found in "https://en.wikipedia.org/wiki/Internet_checksum#cite_note-7"
+    """
+    iph = struct.unpack('!HHHHHHHHHH' , ip_header)
+    checksum = sum(iph)
+    while ip_check.bit_length() > 15:
+        moving_digits = ip_check.bit_length() // 4 * 4
+        carry_bit = ip_check >> moving_digits  # Find the first digit of the ip_check.
+        ip_check = (ip_check & ((1 << moving_digits) - 1)) + carry_bit # add the rest and the first digit
+    if ~ip_check & 0xFFFF != 0x0: # Flip all bits. Correct if result is 0x0000 = 0x0.
+        return False
+    else:
+        return True
+
+
+def ip_builder(ip_id, data_length, protocol, s_addr, d_addr):
+    """
+    Build & return a IP header for packets to be sent.
+    # TODO: need to handle fragments
+    # TODO: check to see if fixed
+    # Example result: b'E\x00\x00(
+                        \xab\xcd\x00\x00
+                        @\x06\xa6\xec
+                        \n\n\n\x02
+                        \n\n\n\x01'
+    # Current result: b'E\x00\x00(
+                        \xd41\x00\x00
+                        \xff\x06\xdb3
+                        \x7f\x00\x01\x01
+                        \xcc,\xc0<'
+                        
+    Args:
+        ip_id: An int representing the identification of this IP connection.
+        data_length: int for length of data other than IP header part.
+        protocol: int for protocol number. 6 as TCP.
+        s_addr: A string of source IP address in dotted quad-string format.
+        d_addr: A string of dest IP address in dotted quad-string format.
+    Returns:
+        A string of binary values as the IP header.
+    """
+    # IP header fields
+    # e.g.
+    # ip_header  = b'\x45\x00\x00\x28'  # Version, IHL, Type of Service | Total Length
+    # ip_header += b'\xab\xcd\x00\x00'  # Identification | Flags, Fragment Offset
+    # ip_header += b'\x40\x06\xa6\xec'  # TTL, Protocol | Header Checksum
+    # ip_header += b'\x0a\x0a\x0a\x02'  # Source Address
+    # ip_header += b'\x0a\x0a\x0a\x01'  # Destination Address
+    # Might need to use htons() to convert 0-65535(0xFFFF) to network byte order.
+    # See https://www.ibm.com/docs/en/zvm/6.4?topic=SSB27U_6.4.0/com.ibm.zvm.v640.kiml0/asonetw.htm
+    ip_ver_ihl = 0x45
+    ip_tos = 0x00
+    ip_tot_len = data_length + 20
+    # ip_id here
+    ip_frag_off = 0x0000
+    ip_ttl = 0xff
+    ip_proto = protocol
+    # ip_check here
+    (first, second, third, fourth) = s_addr.split('.')
+    first_saddr = int(first)
+    second_saddr = int(second)
+    third_saddr = int(third)
+    fourth_saddr = int(fourth)
+    # Use int_to_hex(first_saddr, 4) later
+
+    (first, second, third, fourth) = d_addr.split('.')
+    first_daddr = int(first)
+    second_daddr = int(second)
+    third_daddr = int(third)
+    fourth_daddr = int(fourth)
+
+    # IP checksum calculation. Examples can be found in "https://en.wikipedia.org/wiki/Internet_checksum#cite_note-7"
+    ip_check = ((ip_ver_ihl << 8) + ip_tos) + \
+                ip_tot_len + \
+                ip_id + \
+                ip_frag_off + \
+                ((ip_ttl << 8) + ip_proto) + \
+                ((first_saddr << 8) + second_saddr) + \
+                ((third_saddr << 8) + fourth_saddr) + \
+                ((first_daddr << 8) + second_daddr) + \
+                ((third_daddr << 8) + fourth_daddr)
+    if ip_check.bit_length() > 15:
+        moving_digits = ip_check.bit_length() // 4 * 4
+        carry_bit = ip_check >> moving_digits  # Find the first digit of the ip_check.
+        ip_check = (ip_check & ((1 << moving_digits) - 1)) + carry_bit # add the rest and the first digit
+    ip_check = ~ip_check & 0xFFFF
+    
+    # e.g. bytes([0x65]) == b'e', only 2 hex digits allowed
+    ip_header = b''
+    ip_header += bytes([ip_ver_ihl]) # Version, IHL
+    ip_header += bytes([ip_tos]) # Type of Service
+    ip_header += bytes([(ip_tot_len >> 8)]) # Total Length
+    ip_header += bytes([(ip_tot_len & ((1 << 8) - 1))]) # Total Length
+    ip_header += bytes([(ip_id >> 8)]) # Identification
+    ip_header += bytes([(ip_id & ((1 << 8) - 1))]) # Identification
+    ip_header += bytes([(ip_frag_off >> 8)]) # Flags, Fragment Offset
+    ip_header += bytes([(ip_frag_off & ((1 << 8) - 1))]) # Flags, Fragment Offset
+    ip_header += bytes([ip_ttl]) # TTL
+    ip_header += bytes([ip_proto]) # Protocol
+    ip_header += bytes([(ip_check >> 8)]) # Header Checksum
+    ip_header += bytes([(ip_check & ((1 << 8) - 1))]) # Header Checksum
+    ip_header += bytes([first_saddr]) # Source Address
+    ip_header += bytes([second_saddr]) # Source Address
+    ip_header += bytes([third_saddr]) # Source Address
+    ip_header += bytes([fourth_saddr]) # Source Address
+    ip_header += bytes([first_daddr]) # Destination Address
+    ip_header += bytes([second_daddr]) # Destination Address
+    ip_header += bytes([third_daddr]) # Destination Address
+    ip_header += bytes([fourth_daddr]) # Destination Address
+
+    print("Source IP address:", s_addr)
+    print("Dest IP address:", d_addr)
+
+    return ip_header
+
+
+def tcp_builder(source_port, dest_port, syn, ack, ack_num, window_size, s_addr, d_addr, data):
+    """
+    Build & return a TCP header for packets to be sent, including packets for 3-way handshakes and ACK packets after that.
+    # TODO: Broken. Current result: b'\x04S\x00P\x00\x00\x01\xc6\x00\x00\x00\x00P\x02\xd0\x16\xcc\xf8\x00\x00'
+    Args:
+        source_port: An int representing the source end port number. The local port number listened by the sender. e.g. 1234
+        dest_port: An int representing the destination end port number. The remote port number listened by the receiver. e.g. 80 for http traffic.
+        syn: A boolean representing the SYN flag. True if SYN flag == 1;
+        ack: A boolean representing the ACK flag. True if ACK flag == 1;
+        ack_num: An int representing the ACK number in current packet. Calculated using seq_num of last packet ACKed + 1.
+        window_size: 
+        ip_id: An int representing the identification of this IP connection.
+        s_addr: A string of source IP address in dotted quad-string format.
+        d_addr: A string of dest IP address in dotted quad-string format.
+    Returns:
+        A string of binary values as the TCP header.
+    """
+    # TCP header fields
+    tcp_source_port = source_port # source port
+    tcp_dest_port = dest_port # destination port, 80 if http traffic
+    tcp_seq_num = _TCP_SEQ_NUM # TODO: use a random number here. for test purpose, use _TCP_SEQ_NUM instead.
+    tcp_ack_num = ack_num # should be the seq_num from last packet received + 1
+    tcp_doff = 5 # 4 bit field, size of tcp header, 5 * 4 = 20 bytes if no optional field
+    # TCP flags
+    tcp_fin = 0
+    if syn:
+        tcp_syn = 1
+    else:
+        tcp_syn = 0
+    tcp_rst = 0
+    tcp_psh = 0
+    if ack:
+        tcp_ack = 1
+    else:
+        tcp_ack = 0
+    tcp_urg = 0
+    # window size should be passed from outside by a congestion control function
+    tcp_window = socket.htons(window_size) # 5840 is the maximum allowed window size
+    # socket.htons() is for little-endian machines. See link below for examples.
+    # https://stackoverflow.com/questions/19207745/htons-function-in-socket-programing
+    # how to know if the machine is little-endian or not? See link below for command.
+    # https://serverfault.com/questions/163487/how-to-tell-if-a-linux-system-is-big-endian-or-little-endian
+    tcp_checksum = 0 # use checksum function to calculate it later
+    tcp_urg_ptr = 0
+
+    tcp_offset_res = (tcp_doff << 4) + 0 # 0 is for NS flag. Use 1 if NS flag is 1.
+    tcp_flags = tcp_fin + (tcp_syn << 1) + (tcp_rst << 2) + (tcp_psh <<3) + (tcp_ack << 4) + (tcp_urg << 5) # note that TCP flags are in reverse order
+
+    # the ! in the pack format string means network order
+    # Assume no option fields
+    tcp_header = struct.pack('!HHLLBBHHH' , tcp_source_port, tcp_dest_port, tcp_seq_num, tcp_ack_num, tcp_offset_res, tcp_flags, tcp_window, tcp_checksum, tcp_urg_ptr)
+
+    # pseudo IP header fields for checksum calculation
+    source_address = socket.inet_aton(s_addr) # Converts an IP address from dotted quad-string format to 32-bit packed binary format.
+    dest_address = socket.inet_aton(d_addr)
+    placeholder = 0
+    protocol = socket.IPPROTO_TCP
+    tcp_length = len(tcp_header) + len(data)
+
+    psh = struct.pack('!4s4sBBH', source_address, dest_address, placeholder, protocol, tcp_length)
+    psh = psh + tcp_header + data
+
+    tcp_checksum = checksum(psh)
+    # print("TCP checksum result:", tcp_checksum)
+
+    # make the tcp header again and fill the correct checksum - remember checksum is NOT in network byte order
+    tcp_header = struct.pack('!HHLLBBH' , tcp_source_port, tcp_dest_port, tcp_seq_num, tcp_ack_num, tcp_offset_res, tcp_flags, tcp_window) + struct.pack('H' , tcp_checksum) + struct.pack('!H' , tcp_urg_ptr)
+    return tcp_header
+
+
+def build_pckt(ip_header, tcp_header, data):
+    """
+    Build & return a packet using given IP header, TCP header & data.
+    Args:
+        ip_header: A string of binary values as the IP header.
+        tcp_header: A string of binary values as the TCP header.
+        data: A string of binary values as the data payload.
+    Returns:
+        A string of binary values as the a packet.
+    """
+    return ip_header + tcp_header + data
+
+
+def unpack_pckt_ip(pckt):
     """Unpacks an bytes object representing data received from the socket.
     
-    Defensively unpacks a data packet to retrieve the IP header, TCP header, 
-    and data payload information. Leverages the `unpack` function from the 
-    `struct` library.
-
-    # TODO: Current version assumes IPv4, the assignment packet might be IPv6 as well.
-
+    Return a list of TCP header details. Raises a FilterRejectException if 
+    non-TCP protocol is detected.
     Args:
         pckt: A bytes object representing data packet received.
+        id: Identification for the current connection.
         addr: Address of the remote socket sending data.
         expected_addr: Address that the client sent data to.
-
     Returns:
-        A bytes object representing the data payload.
+        A list that contains a filter flag, a IP header list & the TCP header + data as a string.
+            The filter flag is True when the packet is verified to be wanted ones. Drop the packet if False.
     """
     # Unpacks the first 20 bytes for the IP header.
     ip_header = pckt[0:20]
-    iph = unpack('!BBHHHBBH4s4s' , ip_header)
+    iph = struct.unpack('!BBHHHBBH4s4s' , ip_header)
+    # elements in iph: 0 is version & IHL; 1 is DSCP & ECN; 2 is total length; 3 is IP id; 4 is flags & frag-offset;
+    # 5 is TTL; 6 is protocol; 7 is IP header checksum; 8 is source IP address; 9 is dest IP address;
 
     version_ihl = iph[0]
     version = version_ihl >> 4
     ihl = version_ihl & 0xF
     iph_length = ihl * 4  # Header length in bytes.
 
+    id = iph[3]
     ttl = iph[5]
     protocol = iph[6]
-    s_addr = socket.inet_ntoa(iph[8]);
-    d_addr = socket.inet_ntoa(iph[9]);
+    # Converts addrs to dotted quad-string format.
+    s_addr = socket.inet_ntoa(iph[8])
+    d_addr = socket.inet_ntoa(iph[9])
 
-    # TODO: Filter for packets we are interested in.
-    # filter_pckt()
+    # Filters out non-TCP packets.
+    if protocol != _TCP_PROTOCOL_ID:
+        raise FilterRejectException
 
-    print('Version : ' + str(version) + ' IP Header Length : ' + str(ihl) + ' TTL : ' + str(ttl) + ' Protocol : ' + str(protocol) + ' Source Address : ' + str(s_addr) + ' Destination Address : ' + str(d_addr))
+    return (iph_length, version, ihl, id, ttl, protocol, s_addr, d_addr)
+
+
+def unpack_pckt_tcp(pckt_no_ip):
+    """Unpacks TCP header of an bytes object.
     
+    Defensively unpacks a data packet to retrieve the TCP header information. 
+    Leverages the `unpack` function from the `struct` library.
+
+    Args:
+        pckt_no_ip: A bytes object of data packet after truncating IP header.
+
+    Returns:
+        A list that contains a TCP header tuple.
+    """
     # Unpacks the 20 bytes after IP header for the TCP header.
-    tcp_header = pckt[iph_length:iph_length+20]
-    tcph = unpack('!HHLLBBHHH' , tcp_header)
+    tcp_header = pckt_no_ip[0:20]
+    tcph = struct.unpack('!HHLLBBHHH' , tcp_header)
     
     source_port = tcph[0]
     dest_port = tcph[1]
@@ -58,25 +309,105 @@ def unpack_pckt(pckt, addr, expected_addr):
     acknowledgement = tcph[3]
     doff_reserved = tcph[4]
     tcph_length = doff_reserved >> 4
-    
-    print('Source Port : ' + str(source_port) + ' Dest Port : ' + str(dest_port) + ' Sequence Number : ' + str(sequence) + ' Acknowledgement : ' + str(acknowledgement) + ' TCP header length : ' + str(tcph_length))
+    tcph_length *= 4  # Use same unit as the iph_length in IP header.
 
-    # Gets data after the TCP header.    
-    h_size = iph_length + tcph_length * 4
-    data = pckt[h_size:]
+    return (tcph_length, sequence, acknowledgement, source_port, dest_port)
+
+
+def unpack_raw_http(pckt, remote_hostname, app_port_num):
+    """Unpacks an bytes object representing HTTP data received from raw socket.
     
-    print('Data : ' + data)
+    This should serve as a top-level receiver function that calls other helpers.
+    """
+    # IP-level unpacking.
+    (iph_length, version, ihl, id, ttl, protocol,
+    s_addr, d_addr) = unpack_pckt_ip(pckt)
+
+    # IP-level filter for packets for this app.
+    if (s_addr != socket.gethostbyname(remote_hostname)
+    or d_addr != socket.gethostbyname(socket.gethostname())):
+        raise FilterRejectException
+
+    # TCP-level unpacking.
+    (tcph_length, sequence, acknowledgement,
+    source_port, dest_port) = unpack_pckt_tcp(pckt[iph_length:])
+
+    # TCP-level filter for packets for this app.
+    if app_port_num != dest_port:
+        raise FilterRejectException
+
+    return pckt[(iph_length + tcph_length):]
+
+
+def tear_down_tcp(sends, recvs, remote_hostname):
+    pass
+
+
+def set_up_tcp(sends, recvs, remote_hostname):
+    # 1st SYN packet from local host. Use _TEST_URL for test purpose.
+    data = "".encode(encoding="utf-8")
+    tcp_header = tcp_builder(1107, 80, True, False, 0, 5840, socket.gethostbyname(socket.gethostname()), socket.gethostbyname(url_hostname), data)
+    print("TCP header:", tcp_header)
+    # TODO: use len(tcp_header) + len(data) later after finished TCP header debugging.
+    ip_header = ip_builder(_IP_ID, 20 + len(data), socket.IPPROTO_TCP, socket.gethostbyname(socket.gethostname()), socket.gethostbyname(url_hostname))
+    print("IP header:", ip_header)
+    packet = build_pckt(ip_header, tcp_header, data)
+    # TODO: SYN sending failed. Checking now.
+    try:
+        sends.send(packet)
+        print("Send 1st SYN packet successfully!")
+    except:
+        print("Error: Failed to send 1st SYN packet in the 3-way handshake.")
+        sends.close()
+
+
+def raw_http_get(sends, recvs, remote_hostname):
+    counter = 1  # DEBUG
+    while True:
+        packet, addr = recv_s.recvfrom(_BUFFER_SIZE)
+        
+        # TODO: How to ensure complete packets are received?
+        # This seems no guaranteed for TCP, but the tutorial seems to assume it anyway.
+        # https://stackoverflow.com/questions/67509709/is-recvbufsize-guaranteed-to-receive-all-the-data-if-sended-data-is-smaller-th
+
+        try:
+            filter_flag, ip_header_list, pckt_no_ip = unpack_raw_http(packet, parsed_url.hostname, send_s.getsockname()[1])
+
+            print("Packet #" + str(counter) + ":")  # DEBUG
+            counter += 1
+        # Checks if the packet is intended for other processes.
+        except FilterRejectException:
+            pass
+        # Checks if a packet intended for our app is illegal.
+        # TODO: Add such checks.
+        except Exception as e:
+            print("Error: Illegal response received!")
+            print(e)
+
 
 def main():
+    args = sys.argv[1:]
+    url = args[0] if args else _TEST_URL  # Expects no or exactly one arg.
+    parsed_url = urlparse(url)
+    url_hostname = parsed_url.hostname
+
     # Creates a raw socket for sending packets.
-    with socket(AF_INET, SOCK_RAW, IPPROTO_RAW) as send_s:
+    with socket.socket(
+        socket.AF_INET,
+        socket.SOCK_RAW,
+        socket.IPPROTO_RAW
+        ) as send_s:
         if (send_s == -1):
             print("Error: Raw sending socket creation failed,"
             + " check privileges.")
             exit(1)
 
         # Creates a raw socket for receiving packets.
-        with socket(AF_INET, SOCK_RAW, IPPROTO_TCP) as recv_s:
+        with socket.socket(
+            socket.AF_INET,
+            socket.SOCK_RAW,
+            socket.IPPROTO_TCP
+            ) as recv_s:
             if (recv_s == -1):
                 print("Error: Raw receiving socket creation failed,"
                 + " check privileges.")
@@ -85,16 +416,20 @@ def main():
             # Binds receiving socket to IP interface.
             # recv_s.bind((gethostbyname(gethostname()), 0))
 
-            counter = 1
-            while True:
-                print("Packet #" + str(counter) + ":")
-                # TODO: How to ensure complete packets are received?
-                # This seems no guaranteed for TCP, but the tutorial seems to assume it anyway.
-                # https://stackoverflow.com/questions/67509709/is-recvbufsize-guaranteed-to-receive-all-the-data-if-sended-data-is-smaller-th
-                packet, addr = recv_s.recvfrom(_BUFFER_SIZE)
-                counter += 1
+            # TODO: Add a 3-min timer for all receiving operations.
+            # time_out_time = time.time() + 180
 
+            (send_seq, recv_seq) = set_up_tcp(send_s, recv_s, url_hostname)
+
+            (raw_http_get_res, send_seq, recv_seq) = raw_http_get(send_s, 
+            recv_s, url_hostname, send_seq, recv_seq)
+
+            # TODO: Convert 'raw_http_get_res' into HTML and save it.
+
+            tear_down_tcp(send_s, recv_s, url_hostname, send_seq, recv_seq)
+    
     return
+
 
 if __name__ == "__main__":
     main()
