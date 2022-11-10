@@ -29,12 +29,14 @@ class FilterRejectException(Exception):
 
 def checksum(msg):
     """
-    checksum functions needed for checksum calculation in IP header & TCP header
-    # calculation logic checked
+    Calculate checksum values for IP headers & TCP headers.
+    Calculation logic is checked using the following example:
+    "https://en.wikipedia.org/wiki/Internet_checksum#cite_note-7"
+    
     Args:
-        msg: a binary object
+        msg: A binary object used to calculate checksum, e.g. TCP header, IP header.
     Returns:
-        a four digit hex number
+        A int that is a four-digit hex number, representing the checksum.
     """
     s = 0
 
@@ -55,8 +57,14 @@ def checksum(msg):
 
 def checksum_veri(ip_header):
     """
-    Verify the IPv4 header checksum. Return True if correct; False otherwise.
-    Examples can be found in "https://en.wikipedia.org/wiki/Internet_checksum#cite_note-7"
+    Verify the IPv4 header checksum.
+    Calculation logic is checked using the following example:
+    "https://en.wikipedia.org/wiki/Internet_checksum#cite_note-7"
+
+    Args:
+        ip_header: A binary object representing an IP header.
+    Returns:
+        A boolean representing result of verification. True if correct; False otherwise.
     """
     iph = struct.unpack('!HHHHHHHHHH' , ip_header)
     checksum = sum(iph)
@@ -73,10 +81,10 @@ def checksum_veri(ip_header):
 def ip_builder(ip_id, protocol, s_addr, d_addr):
     """
     Build & return a IP header for packets to be sent.
+    
     Args:
-        ip_id: An int representing the identification of this IP connection.
-        data_length: int for length of data other than IP header part.
-        protocol: int for protocol number. 6 as TCP.
+        ip_id: An int representing the identification of this IP connection. Increase by 1 when a packet is sent.
+        protocol: An int for protocol number. 6 as TCP.
         s_addr: A string of source IP address in dotted quad-string format.
         d_addr: A string of dest IP address in dotted quad-string format.
     Returns:
@@ -100,16 +108,19 @@ def ip_builder(ip_id, protocol, s_addr, d_addr):
 def tcp_builder(s_addr, d_addr, s_port, d_port, tcp_seq_num, tcp_ack_num, fin, syn, rst, psh, ack, urg, window_size, usr_data):
     """
     Build & return a TCP header for packets to be sent, including packets for 3-way handshakes and ACK packets after that.
+
     Args:
-        source_port: An int representing the source end port number. The local port number listened by the sender. e.g. 1234
-        dest_port: An int representing the destination end port number. The remote port number listened by the receiver. e.g. 80 for http traffic.
-        syn: A boolean representing the SYN flag. True if SYN flag == 1;
-        ack: A boolean representing the ACK flag. True if ACK flag == 1;
-        ack_num: An int representing the ACK number in current packet. Calculated using seq_num of last packet ACKed + 1.
-        window_size: 
-        ip_id: An int representing the identification of this IP connection.
         s_addr: A string of source IP address in dotted quad-string format.
         d_addr: A string of dest IP address in dotted quad-string format.
+        s_port: An int representing the source end port number. The local port number listened by the sender. e.g. 1234
+        d_port: An int representing the destination end port number. The remote port number listened by the receiver. e.g. 80 for http traffic.
+        seq_num: An int representing the sequence number in current packet. Calculated using the ACK number of last packet received.
+        ack_num: An int representing the ACK number in current packet. Calculated using seq_num of last packet ACKed + 1.
+        fin: A binary int representing the FIN flag. 1 if FIN flag == 1;
+        syn: A binary int representing the SYN flag. 1 if SYN flag == 1;
+        ack: A binary int representing the ACK flag. 1 if ACK flag == 1;
+        window_size: An int representing the advertised window size of the sender/client.
+        usr_data:
     Returns:
         A string of binary values as the TCP header.
     """
@@ -147,18 +158,15 @@ def tcp_builder(s_addr, d_addr, s_port, d_port, tcp_seq_num, tcp_ack_num, fin, s
 
 
 def unpack_pckt_ip(pckt):
-    """Unpacks an bytes object representing data received from the socket.
-    
+    """
+    Unpacks an bytes object representing data received from the socket.
     Return a list of TCP header details. Raises a FilterRejectException if 
     non-TCP protocol is detected.
+    
     Args:
         pckt: A bytes object representing data packet received.
-        id: Identification for the current connection.
-        addr: Address of the remote socket sending data.
-        expected_addr: Address that the client sent data to.
     Returns:
-        A list that contains a filter flag, a IP header list & the TCP header + data as a string.
-            The filter flag is True when the packet is verified to be wanted ones. Drop the packet if False.
+        A tuple that contains IP header items.
     """
     # Unpacks the first 20 bytes for the IP header.
     ip_header = pckt[0:20]
@@ -186,14 +194,14 @@ def unpack_pckt_ip(pckt):
 
 
 def unpack_pckt_tcp(pckt_no_ip):
-    """Unpacks TCP header of an bytes object.
-    
+    """
+    Unpacks TCP header of an bytes object.
     Defensively unpacks a data packet to retrieve the TCP header information. 
-    Leverages the `unpack` function from the `struct` library.
+
     Args:
         pckt_no_ip: A bytes object of data packet after truncating IP header.
     Returns:
-        A list that contains a TCP header tuple.
+        A tuple that contains all TCP header items.
     """
     # Unpacks the 20 bytes after IP header for the TCP header.
     tcp_header = pckt_no_ip[0:20]
@@ -221,9 +229,17 @@ def unpack_pckt_tcp(pckt_no_ip):
 
 
 def unpack_raw_http(pckt, remote_hostname, local_addr, local_port_num):
-    """Unpacks an bytes object representing HTTP data received from raw socket.
-    
+    """
+    Unpacks an bytes object representing HTTP data received from raw socket.
     This should serve as a top-level receiver function that calls other helpers.
+
+    Args:
+        pckt: A binary object representing the packet with TCP & IP header.
+        remote_hostname: A string representing the address of the remote server.
+        local_addr: A string representing client local IP in dotted quad-string format.
+        local_port_num: An int representing client local port number.
+    Returns:
+        A tuple of the packet without IP & TCP header and other parameters needed for connection.
     """
     # IP-level unpacking.
     (version, ihl, iph_length, ip_id, ttl, protocol,
@@ -255,6 +271,29 @@ def unpack_raw_http(pckt, remote_hostname, local_addr, local_port_num):
 
 def pack_raw_http(s_addr, d_addr, s_port, ip_id, tcp_seq_num, tcp_ack_num,
     tcp_fin, tcp_syn, tcp_rst, tcp_psh, tcp_ack, tcp_urg, adv_window, data):
+    """
+    Pack http packets to send to server.
+
+    Args:
+        s_addr:
+        d_addr:
+        s_port:
+        ip_id:
+        tcp_seq_num:
+        tcp_ack_num:
+        tcp_fin:
+        tcp_syn:
+        tcp_rst:
+        tcp_psh:
+        tcp_ack:
+        tcp_urg:
+        adv_window:
+        data:
+    Returns:
+        A tuple that contains:
+            A binary object as a http packet.
+            A int as the id for next IP header to send.
+    """
     ip_header = ip_builder(ip_id, _TCP_PROTOCOL_ID, s_addr, d_addr)
 
     data = data.encode()
@@ -272,11 +311,33 @@ def pack_raw_http(s_addr, d_addr, s_port, ip_id, tcp_seq_num, tcp_ack_num,
 
 
 def tear_down_tcp(sends, recvs, remote_hostname, ip_id):
+    # http_data = http_data.decode(encoding="utf-8")
+    # http_data_list = http_data.split("\r\n\r\n")
+    # if len(http_data_list) == 2:
+    #     http_header = http_data_list[0]
+    #     http_body = http_data_list[1]
+    #     # header_list = http_header.split("\r\n")
+    # else:
+    #     print("Error in getting http header and data body")
+
+    # full_http_data = ''
+
+    # return full_http_data
     pass
 
 
 def set_up_tcp(sends, recvs, s_addr, remote_hostname,
-ip_id, tcp_sender_seq, tcp_receiver_seq):
+                ip_id, tcp_sender_seq, tcp_receiver_seq):
+    """
+    Communicate with server by 3-way handshake.
+    Args:
+    Returns:
+        A tuple that contains:
+            An int for server's next ACK number
+            An int for server's next sequence number
+            An int for server's next IP header id
+    """
+    # Method to get local host name
     d_addr = socket.gethostbyname(remote_hostname)
     s_port = sends.getsockname()[1]
     adv_window = _DEFAULT_ADV_WINDOW
@@ -339,7 +400,7 @@ ip_id, tcp_sender_seq, tcp_receiver_seq):
 
 
 def raw_http_get(sends, recvs, remote_hostname,
-tcp_sender_seq, tcp_receiver_seq, ip_id):
+                tcp_sender_seq, tcp_receiver_seq, ip_id):
     counter = 1  # DEBUG
     while True:
         packet, addr = recvs.recvfrom(_BUFFER_SIZE)
