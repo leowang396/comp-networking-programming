@@ -15,10 +15,10 @@ _HTTP_PORT_NUM = 80  # 80 for http, 443 for https.
 _TCP_PROTOCOL_ID = 6  # TCP protocol ID in IP header.
 _DEFAULT_ADV_WINDOW = 5840
 _DEFAULT_TTL = 255
-# useless notes:
-# use \xaa as a shorthand to transform 0xaa into strings. only 2 digits allowed.
-# 0x follows number, means HEX number.
-# \x follows number, means HEX ascii characters.
+
+
+# TODO: TCP 1-min time out.
+
 
 class FilterRejectException(Exception):
     """
@@ -92,6 +92,7 @@ def build_ip_head(ip_id, protocol, s_addr, d_addr):
     ip_ver = 4
     ip_ihl_ver = (ip_ver << 4) + ip_ihl
     ip_tos = 0
+    # TODO: Kernel does not seem to be filling tot_len and checksum.
     ip_tot_len = 0  # kernel will fill the correct total length
     ip_frag_off = 0
     ip_ttl = _DEFAULT_TTL
@@ -177,6 +178,8 @@ def unpack_ip_head(pckt):
     version = version_ihl >> 4
     ihl = version_ihl & 0xF
     iph_length = ihl * 4  # Header length in bytes.
+
+    # TODO: Add IP checksum verification.
 
     id = iph[3]
     ttl = iph[5]
@@ -283,7 +286,8 @@ def pack_raw_http(s_addr, d_addr, s_port, ip_id, tcp_seq_num, tcp_ack_num,
     print("====================")
 
     # Sequentially increments the IP identifier.
-    return (ip_header + tcp_header + data, ip_id + 1)
+    ip_id = (ip_id + 1) % (2**16)
+    return (ip_header + tcp_header + data, ip_id)
 
 
 def tear_down_tcp(sends, recvs, parsed_url, s_addr,
@@ -309,8 +313,9 @@ tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
 
     # Waits for the last ACK from server.
     while True:
-        packet, _ = recvs.recvfrom(_BUFFER_SIZE)
+        recvs.settimeout(180)
         try:
+            packet, _ = recvs.recvfrom(_BUFFER_SIZE)
             (_, tcp_receiver_seq, tcp_sender_seq,
             fin, syn, rst, psh, ack, urg, adv_window) = unpack_raw_http(packet, 
             parsed_url.hostname, s_addr, s_port)
@@ -320,6 +325,9 @@ tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
             else:
                 raise ValueError("Invalid ACK response!")
             break
+        except TimeoutError:
+            print("Error: No data received in 3 mins.")
+            exit(1)
         # Checks if the packet is intended for other processes.
         except FilterRejectException:
             pass
@@ -353,11 +361,19 @@ ip_id, tcp_sender_seq, tcp_receiver_seq):
 
     # Waits for SYN/ACK from server.
     while True:
-        packet, _ = recvs.recvfrom(_BUFFER_SIZE)
+        recvs.settimeout(180)
         try:
+            packet, _ = recvs.recvfrom(_BUFFER_SIZE)
             (_, tcp_receiver_seq, tcp_sender_seq,
             fin, syn, rst, psh, ack, urg, adv_window) = unpack_raw_http(packet, 
             remote_hostname, s_addr, s_port)
+
+            # print(fin)  # DEBUG
+            # print(syn) 
+            # print(rst)
+            # print(psh)
+            # print(ack)
+            # print(urg)
 
             if syn == ack == True and fin == rst == psh == urg == False:
                 print("Received valid SYN/ACK")
@@ -367,8 +383,10 @@ ip_id, tcp_sender_seq, tcp_receiver_seq):
         # Checks if the packet is intended for other processes.
         except FilterRejectException:
             pass
+        except TimeoutError:
+            print("Error: No data received in 3 mins.")
+            exit(1)
         # Checks if a packet intended for our app is illegal.
-        # TODO: Add such checks.
         except Exception as e:
             print("Error: Illegal response received!")
             print(repr(e))
@@ -418,29 +436,43 @@ tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
     # Uses TCP connection to receive the HTML file, until FIN response.
     counter = 1  # DEBUG
     html_doc = b""
+    recvs.settimeout(180)
     while True:
-        packet, addr = recvs.recvfrom(_BUFFER_SIZE)
-
         try:
-            # Receives a HTTP GET reponse packet.
-            (res, tcp_receiver_seq, tcp_sender_seq,
+            # TODO: Add TCP congestion window.
+            packet, _ = recvs.recvfrom(_BUFFER_SIZE)
+            # Receives a HTTP GET response packet.
+            (res, seq_num, tcp_sender_seq,
             fin, syn, rst, psh, ack, urg, adv_window) = unpack_raw_http(packet, 
             parsed_url.hostname, s_addr, sends.getsockname()[1])
+
+            # print(fin)  # DEBUG
+            # print(syn) 
+            # print(rst)
+            # print(psh)
+            # print(ack)
+            # print(urg)
+
+            if fin == ack == 1 and syn == rst == urg == psh == 0:
+                print("FIN/ACK packet received!")
+                break
+
+            # Checks for out-of-order or duplicate packets.
+            print("tcp_receiver_seq: " + str(tcp_receiver_seq))
+            print("len(res): " + str(len(res)))
+            print("seq_num: " + str(seq_num))
+            if tcp_receiver_seq != seq_num and tcp_receiver_seq != seq_num + 1:
+                raise ValueError("Out of order! Packet discarded.")
+            else:
+                tcp_receiver_seq = seq_num
 
             print("Packet #" + str(counter) + ":")  # DEBUG
             counter += 1
             html_doc += res
             print(res)
 
-            if fin == ack == 1 and syn == rst == urg == psh == 0:
-                print("FIN/ACK packet received!")
-                break
-            elif fin == 1:  # DEBUG
-                print("Error: FIN-only packet received")
-                break
-
             # ACKs a received packet.
-            tcp_receiver_seq += 1
+            tcp_receiver_seq += len(res)
             fin = syn = rst = psh = urg = 0
             ack = 1
             adv_window = min(adv_window, _DEFAULT_ADV_WINDOW)
@@ -457,16 +489,18 @@ tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
                 print(e)
                 sends.close()
 
+        except TimeoutError:
+            print("Error: No data received in 3 mins.")
+            exit(1)
         # Checks if the packet is intended for other processes.
         except FilterRejectException:
             pass
         # Checks if a packet intended for our app is illegal.
-        # TODO: Add such checks.
         except Exception as e:
             print("Error: Illegal response received!")
             print(e)
 
-    head_content_split = html_doc.split(b"\r\n\r\n")
+    head_content_split = html_doc.split(b"\r\n\r\n", 1)
 
     if head_content_split[0].split(b" ")[1] != b"200":
         print("Error: non-200 status code encounterd.")
@@ -503,10 +537,7 @@ def main():
                 + " check privileges.")
                 exit(1)
 
-            # TODO: Add a 3-min timer for all receiving operations.
-            # time_out_time = time.time() + 180
-
-            # Gets the local IP address and an available port number.
+            # Gets the local IP address.
             try:
                 send_s.connect((socket.gethostbyname(url_hostname), 0))
             except Exception as e:
