@@ -5,6 +5,7 @@ import random
 import sys
 import socket
 import struct
+import time
 from urllib.parse import urlparse
 
 _TEST_URL = "http://david.choffnes.com/classes/cs5700f22/2MB.log"
@@ -30,7 +31,6 @@ def checksum(msg):
     """
     checksum functions needed for checksum calculation in IP header & TCP header
     # calculation logic checked
-
     Args:
         msg: a binary object
     Returns:
@@ -75,12 +75,12 @@ def checksum_veri(ip_header):
         return True
 
 
-def build_ip_head(ip_id, protocol, s_addr, d_addr, ip_tot_len):
+def build_ip_head(ip_id, protocol, s_addr, d_addr):
     """
     Build & return a IP header for packets to be sent.
     Args:
         ip_id: An int representing the identification of this IP connection.
-        ip_tot_len: int for length of data other than IP header part.
+        data_length: int for length of data other than IP header part.
         protocol: int for protocol number. 6 as TCP.
         s_addr: A string of source IP address in dotted quad-string format.
         d_addr: A string of dest IP address in dotted quad-string format.
@@ -91,20 +91,16 @@ def build_ip_head(ip_id, protocol, s_addr, d_addr, ip_tot_len):
     ip_ver = 4
     ip_ihl_ver = (ip_ver << 4) + ip_ihl
     ip_tos = 0
+    # TODO: Kernel does not seem to be filling tot_len and checksum.
+    ip_tot_len = 0  # kernel will fill the correct total length
     ip_frag_off = 0
     ip_ttl = _DEFAULT_TTL
-    ip_checksum = 0 # calculate the checksum later
+    ip_check = 0  # kernel will fill the correct checksum
     ip_saddr = socket.inet_aton(s_addr)
     ip_daddr = socket.inet_aton(d_addr)
 
-    # checksum calculation
-    ip_header = struct.pack('!BBHHHBBH4s4s' , ip_ihl_ver, ip_tos, ip_tot_len, 
-    ip_id, ip_frag_off, ip_ttl, protocol, ip_checksum, ip_saddr, ip_daddr)
-    ip_checksum = checksum(ip_header)
-    ip_header = struct.pack('!BBHHHBBH4s4s' , ip_ihl_ver, ip_tos, ip_tot_len, 
-    ip_id, ip_frag_off, ip_ttl, protocol, ip_checksum, ip_saddr, ip_daddr)
-    
-    return ip_header
+    return struct.pack('!BBHHHBBH4s4s' , ip_ihl_ver, ip_tos, ip_tot_len, 
+    ip_id, ip_frag_off, ip_ttl, protocol, ip_check, ip_saddr, ip_daddr)
 
 
 def build_tcp_head(s_addr, d_addr, s_port, d_port, tcp_seq_num, tcp_ack_num,
@@ -203,10 +199,8 @@ def unpack_tcp_head(pckt_no_ip):
     
     Defensively unpacks a data packet to retrieve the TCP header information. 
     Leverages the `unpack` function from the `struct` library.
-
     Args:
         pckt_no_ip: A bytes object of data packet after truncating IP header.
-
     Returns:
         A list that contains a TCP header tuple.
     """
@@ -270,12 +264,12 @@ def unpack_raw_http(pckt, remote_hostname, local_addr, local_port_num):
 
 def pack_raw_http(s_addr, d_addr, s_port, ip_id, tcp_seq_num, tcp_ack_num,
     tcp_fin, tcp_syn, tcp_rst, tcp_psh, tcp_ack, tcp_urg, adv_window, data):
+    ip_header = build_ip_head(ip_id, _TCP_PROTOCOL_ID, s_addr, d_addr)
 
     data = data.encode()
     tcp_header = build_tcp_head(s_addr, d_addr, s_port, _HTTP_PORT_NUM, 
     tcp_seq_num, tcp_ack_num, tcp_fin, tcp_syn, tcp_rst, tcp_psh, tcp_ack, 
     tcp_urg, adv_window, data)
-    ip_header = build_ip_head(ip_id, _TCP_PROTOCOL_ID, s_addr, d_addr, len(data + tcp_header))
     print("====================")
     ip_hex = str(ip_header.hex())
     ip_hex = " ".join([ip_hex[i:i+2] for i in range(0, len(ip_hex), 2)])
@@ -324,7 +318,6 @@ tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
             parsed_url.hostname, s_addr, s_port)
 
             if ack == True and fin == syn == rst == psh == urg == False:
-            # if ack == fin == True:
                 print("Received valid ACK")
             else:
                 raise ValueError("Invalid ACK response!")
@@ -567,6 +560,8 @@ def main():
             s_addr = send_s.getsockname()[0]
 
             # Randomly picks the first seq num.
+            # random seed?
+            # use it for the port num as well
             tcp_sender_seq = random.randint(0, 2**31)
             # SYN packet is the first packet in this connection.
             tcp_receiver_seq = 0
