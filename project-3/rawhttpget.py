@@ -1,3 +1,5 @@
+#! /usr/bin/env python3
+
 """
 Project 3: Raw Sockets
 """
@@ -5,8 +7,8 @@ import random
 import sys
 import socket
 import struct
-import time
 from urllib.parse import urlparse
+
 
 _TEST_URL = "http://david.choffnes.com/classes/cs5700f22/2MB.log"
 _BUFFER_SIZE = 65565  # Max possible TCP segment size.
@@ -15,9 +17,6 @@ _HTTP_PORT_NUM = 80  # 80 for http, 443 for https.
 _TCP_PROTOCOL_ID = 6  # TCP protocol ID in IP header.
 _DEFAULT_ADV_WINDOW = 5840
 _DEFAULT_TTL = 255
-
-
-# TODO: TCP 1-min time out.
 
 
 class FilterRejectException(Exception):
@@ -29,18 +28,18 @@ class FilterRejectException(Exception):
 
 def checksum(msg):
     """
-    checksum functions needed for checksum calculation in IP header & TCP header
-    # calculation logic checked
+    Calculate checksum required in IP headers & TCP headers.
+
     Args:
-        msg: a binary object
+        msg: A bytes object used to calculate the checksum.
     Returns:
-        a four digit hex number
+        A four digit hex number representing the checksum calculated.
     """
     s = 0
 
-    # loop taking 2 characters at a time
+    # Take 2 characters at a time.
     for i in range(0, len(msg), 2):
-        # in python3, b"abc"[1] = 98. so no need for ord()
+        # No need for ord() in python 3.
         w = msg[i]
         # If a segment contains an odd number of header and text octets to be 
         # checksummed, the last octet is padded on the right with zeros to form 
@@ -52,38 +51,22 @@ def checksum(msg):
     s = (s >> 16) + (s & 0xffff)
     s = s + (s >> 16)
     
-    # complement and mask to 4 byte short
+    # Take complement and mask to 4 byte short.
     s = ~s & 0xffff
     
     return s
 
 
-def checksum_veri(ip_header):
-    """
-    Verify the IPv4 header checksum. Return True if correct; False otherwise.
-    Examples can be found in "https://en.wikipedia.org/wiki/Internet_checksum#cite_note-7"
-    """
-    iph = struct.unpack('!HHHHHHHHHH' , ip_header)
-    checksum = sum(iph)
-    while ip_check.bit_length() > 15:
-        moving_digits = ip_check.bit_length() // 4 * 4
-        carry_bit = ip_check >> moving_digits  # Find the first digit of the ip_check.
-        ip_check = (ip_check & ((1 << moving_digits) - 1)) + carry_bit # add the rest and the first digit
-    if ~ip_check & 0xFFFF != 0x0: # Flip all bits. Correct if result is 0x0000 = 0x0.
-        return False
-    else:
-        return True
-
-
 def build_ip_head(ip_id, protocol, s_addr, d_addr, ip_tot_len):
     """
-    Build & return a IP header for packets to be sent.
+    Build & return a IP header for packets to be sent, including packets for handshakes and packets after that.
+
     Args:
         ip_id: An int representing the identification of this IP connection.
-        ip_tot_len: int for length of data other than IP header part.
-        protocol: int for protocol number. 6 as TCP.
+        protocol: An int for protocol number. 6 as TCP.
         s_addr: A string of source IP address in dotted quad-string format.
         d_addr: A string of dest IP address in dotted quad-string format.
+        ip_tot_len: An int for length of data other than IP header part. Minimum 20.
     Returns:
         A string of binary values as the IP header.
     """
@@ -93,11 +76,11 @@ def build_ip_head(ip_id, protocol, s_addr, d_addr, ip_tot_len):
     ip_tos = 0
     ip_frag_off = 0
     ip_ttl = _DEFAULT_TTL
-    ip_checksum = 0 # calculate the checksum later
+    ip_checksum = 0
     ip_saddr = socket.inet_aton(s_addr)
     ip_daddr = socket.inet_aton(d_addr)
 
-    # checksum calculation
+    # Calculate checksum and pack again.
     ip_header = struct.pack('!BBHHHBBH4s4s' , ip_ihl_ver, ip_tos, ip_tot_len, 
     ip_id, ip_frag_off, ip_ttl, protocol, ip_checksum, ip_saddr, ip_daddr)
     ip_checksum = checksum(ip_header)
@@ -108,23 +91,29 @@ def build_ip_head(ip_id, protocol, s_addr, d_addr, ip_tot_len):
 
 
 def build_tcp_head(s_addr, d_addr, s_port, d_port, tcp_seq_num, tcp_ack_num,
- fin, syn, rst, psh, ack, urg, window_size, usr_data):
+fin, syn, rst, psh, ack, urg, window_size, usr_data):
     """
-    Build & return a TCP header for packets to be sent, including packets for 3-way handshakes and ACK packets after that.
+    Build & return a TCP header for packets to be sent, including packets for handshakes and packets after that.
+
     Args:
-        source_port: An int representing the source end port number. The local port number listened by the sender. e.g. 1234
-        dest_port: An int representing the destination end port number. The remote port number listened by the receiver. e.g. 80 for http traffic.
-        syn: A boolean representing the SYN flag. True if SYN flag == 1;
-        ack: A boolean representing the ACK flag. True if ACK flag == 1;
-        ack_num: An int representing the ACK number in current packet. Calculated using seq_num of last packet ACKed + 1.
-        window_size: 
-        ip_id: An int representing the identification of this IP connection.
         s_addr: A string of source IP address in dotted quad-string format.
         d_addr: A string of dest IP address in dotted quad-string format.
+        s_port: An int representing the source end port number. The local port number listened by the sender. e.g. 1234
+        d_port: An int representing the destination end port number. The remote port number listened by the receiver. e.g. 80 for http traffic.
+        tcp_seq_num: An int representing the sequence number in current packet.
+        tcp_ack_num: An int representing the ACK number in current packet.
+        fin: A binary int number representing the FIN flag. 1 if FIN flag == 1; 0 otherwise.
+        syn: A binary int number representing the SYN flag. 1 if SYN flag == 1; 0 otherwise.
+        rst: A binary int number representing the RST flag. 1 if RST flag == 1; 0 otherwise.
+        psh: A binary int number representing the PSH flag. 1 if PSH flag == 1; 0 otherwise.
+        ack: A binary int number representing the ACK flag. 1 if ACK flag == 1; 0 otherwise.
+        urg: A binary int number representing the URG flag. 1 if URG flag == 1; 0 otherwise.
+        window_size: A int representing the advertised window size of client. Maximum is 5840.
+        usr_data: A bytes object representing the data used in TCP data body.
     Returns:
         A string of binary values as the TCP header.
     """
-    tcp_doff = 5  # Data offset or size of tcp header in terms of 4-bytes words
+    tcp_doff = 5 # Data offset or size of tcp header in terms of 4-bytes words.
     tcp_window = socket.htons(window_size)
     tcp_check = 0
     tcp_urg_ptr = 0
@@ -135,7 +124,7 @@ def build_tcp_head(s_addr, d_addr, s_port, d_port, tcp_seq_num, tcp_ack_num,
 
     tcp_header = struct.pack('!HHLLBBHHH' , s_port, d_port, tcp_seq_num, tcp_ack_num, tcp_offset_res, tcp_flags,  tcp_window, tcp_check, tcp_urg_ptr)
 
-    # pseudo IP header fields for checksum calculation
+    # Pseudo IP header fields for checksum calculation.
     source_address = socket.inet_aton(s_addr)
     dest_address = socket.inet_aton(d_addr)
     placeholder = 0
@@ -148,8 +137,8 @@ def build_tcp_head(s_addr, d_addr, s_port, d_port, tcp_seq_num, tcp_ack_num,
 
     tcp_checksum = checksum(psh)
 
-    # Makes the tcp header again and fill the correct checksum - remember
-    # checksum is NOT in network byte order.
+    # Make the tcp header again and fill the correct checksum.
+    # Checksum is NOT in network byte order.
     tcp_header = (struct.pack('!HHLLBBH' , s_port, d_port, tcp_seq_num, 
     tcp_ack_num, tcp_offset_res, tcp_flags, tcp_window)
     + struct.pack('H', tcp_checksum) + struct.pack('!H' , tcp_urg_ptr))
@@ -158,40 +147,37 @@ def build_tcp_head(s_addr, d_addr, s_port, d_port, tcp_seq_num, tcp_ack_num,
 
 
 def unpack_ip_head(pckt):
-    """Unpacks an bytes object representing data received from the socket.
-    
-    Return a list of TCP header details. Raises a FilterRejectException if 
-    non-TCP protocol is detected.
+    """
+    Unpack a bytes object representing data received from the socket.
+    Return a tuple of TCP header items.
+    Raise a FilterRejectException if non-TCP protocols are detected.
+
     Args:
         pckt: A bytes object representing data packet received.
-        id: Identification for the current connection.
-        addr: Address of the remote socket sending data.
-        expected_addr: Address that the client sent data to.
     Returns:
-        A list that contains a filter flag, a IP header list & the TCP header + data as a string.
-            The filter flag is True when the packet is verified to be wanted ones. Drop the packet if False.
+        A tuple that contains TCP header items including:
+            (version, ihl, iph_length, id, ttl, protocol, s_addr, d_addr)
     """
-    # Unpacks the first 20 bytes for the IP header.
+    # Unpack the first 20 bytes for the IP header.
     ip_header = pckt[0:20]
     iph = struct.unpack('!BBHHHBBH4s4s' , ip_header)
-    # elements in iph: 0 is version & IHL; 1 is DSCP & ECN; 2 is total length; 3 is IP id; 4 is flags & frag-offset;
-    # 5 is TTL; 6 is protocol; 7 is IP header checksum; 8 is source IP address; 9 is dest IP address;
+    # Items in iph: 0 is version & IHL; 1 is DSCP & ECN; 2 is total length; 3 is IP id;
+    # 4 is flags & frag-offset; 5 is TTL; 6 is protocol; 7 is IP header checksum;
+    # 8 is source IP address; 9 is dest IP address;
 
     version_ihl = iph[0]
     version = version_ihl >> 4
     ihl = version_ihl & 0xF
     iph_length = ihl * 4  # Header length in bytes.
 
-    # TODO: Add IP checksum verification.
-
     id = iph[3]
     ttl = iph[5]
     protocol = iph[6]
-    # Converts addrs to dotted quad-string format.
+    # Convert s_addr and d_addr to dotted quad-string format.
     s_addr = socket.inet_ntoa(iph[8])
     d_addr = socket.inet_ntoa(iph[9])
 
-    # Filters out non-TCP packets.
+    # Filter out non-TCP packets.
     if protocol != _TCP_PROTOCOL_ID:
         raise FilterRejectException
 
@@ -199,16 +185,16 @@ def unpack_ip_head(pckt):
 
 
 def unpack_tcp_head(pckt_no_ip):
-    """Unpacks TCP header of an bytes object.
-    
-    Defensively unpacks a data packet to retrieve the TCP header information. 
-    Leverages the `unpack` function from the `struct` library.
-    Args:
-        pckt_no_ip: A bytes object of data packet after truncating IP header.
-    Returns:
-        A list that contains a TCP header tuple.
     """
-    # Unpacks the 20 bytes after IP header for the TCP header.
+    Unpack the TCP header of a bytes object defensively.
+
+    Args:
+        pckt_no_ip: A bytes object of data packet after truncating the IP header.
+    Returns:
+        A tuple that contains TCP header items, including:
+            (source_port, dest_port, sequence, acknowledgement, tcph_length, fin, syn, rst, psh, ack, urg, adv_window, checksum)
+    """
+    # Unpack the 20 bytes after IP header for the TCP header.
     tcp_header = pckt_no_ip[0:20]
     tcph = struct.unpack('!HHLLBBHHH' , tcp_header)
     
@@ -234,16 +220,24 @@ def unpack_tcp_head(pckt_no_ip):
 
 
 def unpack_raw_http(pckt, remote_hostname, local_addr, local_port_num):
-    """Unpacks an bytes object representing HTTP data received from raw socket.
-    
+    """
+    Unpack a bytes object representing HTTP data received from raw socket.
     This should serve as a top-level receiver function that calls other helpers.
+
+    Args:
+        pckt: A bytes object representing a raw packet with the IP header and the TCP header.
+        remote_hostname: A string representing the remote server. e.g. david.choffnes.com
+        local_addr: A string representing the IP address of local client in dotted quad-string format.
+        local_port_num: An int representing the port number used by the local client.
+    Returns:
+        A tuple that contains HTTP data, TCP sequence number, TCP acknowledgement number, TCP flags and TCP advertised window size.
     """
     # IP-level unpacking.
     (version, ihl, iph_length, ip_id, ttl, protocol,
     s_addr, d_addr) = unpack_ip_head(pckt)
     # print("IP-level unpacking done!")
 
-    # IP-level filter for packets for this app.
+    # IP-level filter for packets received by this application.
     if (s_addr != socket.gethostbyname(remote_hostname)
     or d_addr != local_addr):
         raise FilterRejectException
@@ -255,12 +249,10 @@ def unpack_raw_http(pckt, remote_hostname, local_addr, local_port_num):
     adv_window, checksum) = unpack_tcp_head(pckt[iph_length:])
     print("TCP-level unpacking done!")
 
-    # TCP-level filter for packets for this app.
+    # TCP-level filter for packets received by this application.
     if local_port_num != dest_port:
         raise FilterRejectException
     print("TCP-level filtering done!")
-
-    # TODO: Add TCP checksum validation.
 
     return (pckt[(iph_length + tcph_length):], sequence, acknowledgement,
     fin, syn, rst, psh, ack, urg, adv_window)
@@ -268,37 +260,68 @@ def unpack_raw_http(pckt, remote_hostname, local_addr, local_port_num):
 
 def pack_raw_http(s_addr, d_addr, s_port, ip_id, tcp_seq_num, tcp_ack_num,
     tcp_fin, tcp_syn, tcp_rst, tcp_psh, tcp_ack, tcp_urg, adv_window, data):
-    
+    """
+    Pack raw packets for the client to send to server.
 
+    Args:
+        s_addr: A string of source IP address in dotted quad-string format.
+        d_addr: A string of dest IP address in dotted quad-string format.
+        s_port: An int representing the port number of the client.
+        ip_id: An int representing the IP identifier for the raw packet.
+        tcp_seq_num: An int representing the TCP sequence number for the raw packet.
+        tcp_ack_num: An int representing the TCP acknowledge number for the raw packet.
+        tcp_fin: A binary int number representing the TCP FIN flag. 1 if FIN flag == 1; 0 otherwise.
+        tcp_syn: A binary int number representing the TCP SYN flag. 1 if SYN flag == 1; 0 otherwise.
+        tcp_rst: A binary int number representing the TCP RST flag. 1 if RST flag == 1; 0 otherwise.
+        tcp_psh: A binary int number representing the TCP PSH flag. 1 if PSH flag == 1; 0 otherwise.
+        tcp_ack: A binary int number representing the TCP ACK flag. 1 if ACK flag == 1; 0 otherwise.
+        tcp_urg: A binary int number representing the TCP URG flag. 1 if URG flag == 1; 0 otherwise.
+        adv_window: An int representing the advertised window size for the client.
+        data: A string that contains the data body to be sent in the raw packet.
+    Returns:
+        A tuple that contains the raw packet to be sent and the IP identifier.
+    """
     data = data.encode()
     tcp_header = build_tcp_head(s_addr, d_addr, s_port, _HTTP_PORT_NUM, 
     tcp_seq_num, tcp_ack_num, tcp_fin, tcp_syn, tcp_rst, tcp_psh, tcp_ack, 
     tcp_urg, adv_window, data)
 
     ip_header = build_ip_head(ip_id, _TCP_PROTOCOL_ID, s_addr, d_addr, len(data + tcp_header))
-    print("====================")
-    ip_hex = str(ip_header.hex())
-    ip_hex = " ".join([ip_hex[i:i+2] for i in range(0, len(ip_hex), 2)])
-    print("IP Header:\t" + ip_hex)
-    tcp_hex = str(tcp_header.hex())
-    tcp_hex = " ".join([tcp_hex[i:i+2] for i in range(0, len(tcp_hex), 2)])
-    print("TCP Header:\t" + tcp_hex)
-    data_hex = str(data.hex())
-    data_hex = " ".join([data_hex[i:i+2] for i in range(0, len(data_hex), 2)])
-    print("Data Payload:\t" + data_hex)
-    print("====================")
 
-    # Sequentially increments the IP identifier.
+    # Debug code
+    # ip_hex = str(ip_header.hex())
+    # ip_hex = " ".join([ip_hex[i:i+2] for i in range(0, len(ip_hex), 2)])
+
+    # tcp_hex = str(tcp_header.hex())
+    # tcp_hex = " ".join([tcp_hex[i:i+2] for i in range(0, len(tcp_hex), 2)])
+
+    # data_hex = str(data.hex())
+    # data_hex = " ".join([data_hex[i:i+2] for i in range(0, len(data_hex), 2)])
+
+    # Increment the IP identifier sequentially.
     ip_id = (ip_id + 1) % (2**16)
     return (ip_header + tcp_header + data, ip_id)
 
 
 def tear_down_tcp(sends, recvs, parsed_url, s_addr,
 tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
+    """
+    Send the last packet and shut down the connection to the server.
+
+    Args:
+        sends: A socket instance used to send data to the server.
+        recvs: A socket instance used to receive data from the server.
+        parsed_url: A string representing the URL domain name. It can be transformed into the server IP address.
+        s_addr: A string representing the client IP address in dotted quad-string format.
+        tcp_sender_seq: An int representing the TCP sequence initiated by the client.
+        tcp_receiver_seq: An int representing the TCP sequence obtained from the server.
+        ip_id: An int representing the IP identifier.
+        adv_window: An int representing the advertised window size.
+    """
     d_addr = socket.gethostbyname(parsed_url.hostname)
     s_port = sends.getsockname()[1]
 
-    # Sends the last FIN/ACK packet.
+    # Send the last FIN/ACK packet.
     syn = rst = psh = urg = 0
     fin = ack = 1
     adv_window = min(adv_window, _DEFAULT_ADV_WINDOW)
@@ -308,14 +331,12 @@ tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
     adv_window, data)
     try:
         n = sends.sendto(packet, (d_addr, 0))
-
-        print(f"{n} bytes sent!")
     except:
-        print("Error: Failed to send the last FIN/ACK packet.")
         sends.close()
 
-    # Waits for the last ACK from server.
+    # Wait for the last ACK from server.
     while True:
+        # Set a 3-minute timeout.
         recvs.settimeout(180)
         try:
             packet, _ = recvs.recvfrom(_BUFFER_SIZE)
@@ -324,30 +345,42 @@ tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
             parsed_url.hostname, s_addr, s_port)
 
             if ack == True and fin == syn == rst == psh == urg == False:
-                print("Received valid ACK")
+                pass
             else:
                 raise ValueError("Invalid ACK response!")
             break
         except TimeoutError:
-            print("Error: No data received in 3 mins.")
             exit(1)
-        # Checks if the packet is intended for other processes.
+        # Check if the packet is intended for other processes.
         except FilterRejectException:
             pass
-        # Checks if a packet intended for our app is illegal.
+        # Check if a packet intended for our app is illegal.
         except Exception as e:
-            print("Error: Illegal response received!")
-            print(repr(e))
-
+            pass
     return
 
 
 def set_up_tcp(sends, recvs, s_addr, remote_hostname,
 ip_id, tcp_sender_seq, tcp_receiver_seq):
+    """
+    Set up connection with the server.
+    This function should be called to finish the 3-way handshake with the server when initiating the connection.
+
+    Args:
+        sends: A socket instance used to send data to the server.
+        recvs: A socket instance used to receive data from the server.
+        s_addr: A string representing the IP address of the client in dotted quad-string format.
+        remote_hostname: A string representing the remote server. e.g. david.choffnes.com
+        ip_id: An int representing the IP identifier.
+        tcp_sender_seq: An int representing the TCP sequence initiated by the client.
+        tcp_receiver_seq: An int representing the TCP sequence obtained from the server.
+    Returns:
+        A tuple that contains TCP sender sequence, TCP receiver sequence, IP identifier, and advertised window size.
+    """
     d_addr = socket.gethostbyname(remote_hostname)
     s_port = sends.getsockname()[1]
 
-    # Sends the 1st SYN packet.
+    # Send the 1st SYN packet.
     data = ""
     fin = rst = psh = ack = urg = 0
     syn = 1
@@ -356,13 +389,10 @@ ip_id, tcp_sender_seq, tcp_receiver_seq):
     _DEFAULT_ADV_WINDOW, data)
     try:
         n = sends.sendto(packet, (d_addr, 0))
-
-        print(f"{n} bytes sent!")
     except:
-        print("Error: Failed to send 1st SYN packet in the 3-way handshake.")
         sends.close()
 
-    # Waits for SYN/ACK from server.
+    # Wait for SYN/ACK from server.
     while True:
         recvs.settimeout(180)
         try:
@@ -371,30 +401,21 @@ ip_id, tcp_sender_seq, tcp_receiver_seq):
             fin, syn, rst, psh, ack, urg, adv_window) = unpack_raw_http(packet, 
             remote_hostname, s_addr, s_port)
 
-            # print(fin)  # DEBUG
-            # print(syn) 
-            # print(rst)
-            # print(psh)
-            # print(ack)
-            # print(urg)
-
             if syn == ack == True and fin == rst == psh == urg == False:
-                print("Received valid SYN/ACK")
+                pass
             else:
                 raise ValueError("Invalid SYN/ACK response!")
             break
-        # Checks if the packet is intended for other processes.
+        # Check if the packet is intended for other processes.
         except FilterRejectException:
             pass
         except TimeoutError:
-            print("Error: No data received in 3 mins.")
             exit(1)
-        # Checks if a packet intended for our app is illegal.
+        # Check if a packet intended for our app is illegal.
         except Exception as e:
-            print("Error: Illegal response received!")
-            print(repr(e))
+            pass
     
-    # Sends the last ACK to complete three-way handshake.
+    # Send the last ACK to complete three-way handshake.
     data = ""
     fin = syn = rst = psh = urg = 0
     ack = 1
@@ -405,10 +426,7 @@ ip_id, tcp_sender_seq, tcp_receiver_seq):
     adv_window, data)
     try:
         n = sends.sendto(packet, (d_addr, 0))
-
-        print(f"{n} bytes sent!")
     except:
-        print("Error: Failed to send last SYN packet in the 3-way handshake.")
         sends.close()
 
     return (tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window)
@@ -416,6 +434,21 @@ ip_id, tcp_sender_seq, tcp_receiver_seq):
 
 def raw_http_get(sends, recvs, parsed_url, s_addr,
 tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
+    """
+    Get HTML data body from HTTP packets.
+
+    Args:
+        sends: A socket instance used to send data to the server.
+        recvs: A socket instance used to receive data from the server.
+        parsed_url:
+        s_addr: A string representing the IP address of the client in dotted quad-string format.
+        tcp_sender_seq: An int representing the TCP sequence initiated by the client.
+        tcp_receiver_seq: An int representing the TCP sequence obtained from the server.
+        ip_id: An int representing the IP identifier.
+        adv_window: An int representing the advertised window size.
+    Returns:
+        A tuple that contains the HTML data body, TCP sender sequence, TCP receiver sequence, and IP identifier.
+    """
     d_addr = socket.gethostbyname(parsed_url.hostname)
     s_port = sends.getsockname()[1]
     data = "".join(["GET ", parsed_url.path, " HTTP/1.1", "\r\n",
@@ -429,71 +462,43 @@ tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
 
     try:
         n = sends.sendto(packet, (d_addr, 0))
-
-        print(f"{n} bytes sent!")
     except Exception as e:
-        print("Error: Failed to send GET request.")
-        print(e)
         sends.close()
 
-    # Uses TCP connection to receive the HTML file, until FIN response.
-    counter = 1  # DEBUG
+    # Use TCP connection to receive the HTML file, until FIN response.
     html_doc = b""
+    # Set a 3-minute timeout.
     recvs.settimeout(180)
     while True:
         try:
-            # TODO: Add TCP congestion window.
             packet, _ = recvs.recvfrom(_BUFFER_SIZE)
-            # Receives a HTTP GET response packet.
+            # Receive a HTTP GET response packet.
             (res, seq_num, tcp_sender_seq,
             fin, syn, rst, psh, ack, urg, adv_window) = unpack_raw_http(packet, 
             parsed_url.hostname, s_addr, sends.getsockname()[1])
 
-            # print(fin)  # DEBUG
-            # print(syn) 
-            # print(rst)
-            # print(psh)
-            # print(ack)
-            # print(urg)
-
             if fin == ack == 1 and syn == rst == urg == psh == 0:
-                print("FIN/ACK packet received!")
                 break
-            # handle fin ack psh situation
+            # Handle FIN/ACK/PSH situation
             elif fin == ack == psh == 1 and syn == rst == urg == 0:
-                print("FIN/ACK/PSH packet received!")
-
-                # Checks for out-of-order or duplicate packets.
-                print("tcp_receiver_seq: " + str(tcp_receiver_seq))
-                print("len(res): " + str(len(res)))
-                print("seq_num: " + str(seq_num))
+                # Check for out-of-order or duplicate packets.
                 if tcp_receiver_seq != seq_num and tcp_receiver_seq != seq_num + 1:
                     raise ValueError("Out of order! Packet discarded.")
                 else:
                     tcp_receiver_seq = seq_num
 
-                print("Packet #" + str(counter) + ":")  # DEBUG
-                counter += 1
                 html_doc += res
-                print(res)
-
                 break
 
-            # Checks for out-of-order or duplicate packets.
-            print("tcp_receiver_seq: " + str(tcp_receiver_seq))
-            print("len(res): " + str(len(res)))
-            print("seq_num: " + str(seq_num))
+            # Check for out-of-order or duplicate packets.
             if tcp_receiver_seq != seq_num and tcp_receiver_seq != seq_num + 1:
                 raise ValueError("Out of order! Packet discarded.")
             else:
                 tcp_receiver_seq = seq_num
 
-            print("Packet #" + str(counter) + ":")  # DEBUG
-            counter += 1
             html_doc += res
-            print(res)
 
-            # ACKs a received packet.
+            # Acknowledge a received packet.
             tcp_receiver_seq += len(res)
             fin = syn = rst = psh = urg = 0
             ack = 1
@@ -504,48 +509,43 @@ tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
             adv_window, data)
             try:
                 n = sends.sendto(packet, (d_addr, 0))
-
-                print(f"{n} bytes sent!")
             except Exception as e:
-                print("Error: Failed to send ACK.")
-                print(e)
                 sends.close()
 
         except TimeoutError:
-            print("Error: No data received in 3 mins.")
             exit(1)
-        # Checks if the packet is intended for other processes.
+        # Check if the packet is intended for other processes.
         except FilterRejectException:
             pass
-        # Checks if a packet intended for our app is illegal.
+        # Check if a packet intended for the client is illegal.
         except Exception as e:
-            print("Error: Illegal response received!")
-            print(e)
+            pass
 
     head_content_split = html_doc.split(b"\r\n\r\n", 1)
 
     if head_content_split[0].split(b" ")[1] != b"200":
-        print("Error: non-200 status code encounterd.")
         exit(1)
     
     return (head_content_split[1], tcp_sender_seq, tcp_receiver_seq, ip_id)
 
 
 def main():
+    """
+    Handle the whole connection flow during the connection at a high-level.
+    """
+    # Set up a commandline interfase.
     args = sys.argv[1:]
-    url = args[0] if args else _TEST_URL  # Expects no or exactly one arg.
+    url = args[0] if args else _TEST_URL  # Expect no or exactly one arg.
     parsed_url = urlparse(url)
     url_hostname = parsed_url.hostname
 
-    # Creates a raw socket for sending packets.
+    # Create a raw socket for sending packets.
     with socket.socket(
         socket.AF_INET,
         socket.SOCK_RAW,
         socket.IPPROTO_RAW
         ) as send_s:
         if (send_s == -1):
-            print("Error: Raw sending socket creation failed,"
-            + " check privileges.")
             exit(1)
 
         # Creates a raw socket for receiving packets.
@@ -555,35 +555,35 @@ def main():
             socket.IPPROTO_TCP
             ) as recv_s:
             if (recv_s == -1):
-                print("Error: Raw receiving socket creation failed,"
-                + " check privileges.")
                 exit(1)
 
-            # Gets the local IP address.
+            # Get the local IP address.
             try:
                 send_s.connect((socket.gethostbyname(url_hostname), 0))
             except Exception as e:
-                print(e)
+                pass
             s_addr = send_s.getsockname()[0]
 
-            # Randomly picks the first seq num.
-            # random seed?
-            # use it for the port num as well
+            # Pick the first sequence number randomly.
             tcp_sender_seq = random.randint(0, 2**31)
             # SYN packet is the first packet in this connection.
             tcp_receiver_seq = 0
 
+            # Set up the connection using a handshake.
             (tcp_sender_seq, tcp_receiver_seq,
             ip_id, adv_window) = set_up_tcp(send_s, recv_s, s_addr, 
             url_hostname, _INIT_IP_ID, tcp_sender_seq, tcp_receiver_seq)
 
+            # Get HTML data body during the connection.
             (raw_http_get_res, tcp_sender_seq, tcp_receiver_seq,
             ip_id) = raw_http_get(send_s, recv_s, parsed_url, s_addr,
             tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window)
 
+            # Send the last packet and shut down the connection.
             tear_down_tcp(send_s, recv_s, parsed_url, s_addr,
             tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window)
 
+            # Save the HTML data body to the local directory.
             file_name = parsed_url.path.split("/")[-1]
             file_name = file_name if file_name else "index.html"
             with open(file_name, "wb") as file:
