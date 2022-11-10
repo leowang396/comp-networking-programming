@@ -8,7 +8,7 @@ import struct
 import time
 from urllib.parse import urlparse
 
-_TEST_URL = "http://david.choffnes.com/classes/cs5700f22/project3.php"
+_TEST_URL = "http://david.choffnes.com/classes/cs5700f22/2MB.log"
 _BUFFER_SIZE = 65565  # Max possible TCP segment size.
 _INIT_IP_ID = 0
 _HTTP_PORT_NUM = 80  # 80 for http, 443 for https.
@@ -256,7 +256,7 @@ def unpack_raw_http(pckt, remote_hostname, local_addr, local_port_num):
         raise FilterRejectException
     print("TCP-level filtering done!")
 
-    # TODO: Add TCP checksum validation?
+    # TODO: Add TCP checksum validation.
 
     return (pckt[(iph_length + tcph_length):], sequence, acknowledgement,
     fin, syn, rst, psh, ack, urg, adv_window)
@@ -286,8 +286,49 @@ def pack_raw_http(s_addr, d_addr, s_port, ip_id, tcp_seq_num, tcp_ack_num,
     return (ip_header + tcp_header + data, ip_id + 1)
 
 
-def tear_down_tcp(sends, recvs, remote_hostname, ip_id):
-    pass
+def tear_down_tcp(sends, recvs, parsed_url, s_addr,
+tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
+    d_addr = socket.gethostbyname(parsed_url.hostname)
+    s_port = sends.getsockname()[1]
+
+    # Sends the last FIN/ACK packet.
+    syn = rst = psh = urg = 0
+    fin = ack = 1
+    adv_window = min(adv_window, _DEFAULT_ADV_WINDOW)
+    data = ""
+    (packet, ip_id) = pack_raw_http(s_addr, d_addr, s_port, ip_id,
+    tcp_sender_seq, tcp_receiver_seq, fin, syn, rst, psh, ack, urg, 
+    adv_window, data)
+    try:
+        n = sends.sendto(packet, (d_addr, 0))
+
+        print(f"{n} bytes sent!")
+    except:
+        print("Error: Failed to send the last FIN/ACK packet.")
+        sends.close()
+
+    # Waits for the last ACK from server.
+    while True:
+        packet, _ = recvs.recvfrom(_BUFFER_SIZE)
+        try:
+            (_, tcp_receiver_seq, tcp_sender_seq,
+            fin, syn, rst, psh, ack, urg, adv_window) = unpack_raw_http(packet, 
+            parsed_url.hostname, s_addr, s_port)
+
+            if ack == True and fin == syn == rst == psh == urg == False:
+                print("Received valid ACK")
+            else:
+                raise ValueError("Invalid ACK response!")
+            break
+        # Checks if the packet is intended for other processes.
+        except FilterRejectException:
+            pass
+        # Checks if a packet intended for our app is illegal.
+        except Exception as e:
+            print("Error: Illegal response received!")
+            print(repr(e))
+
+    return
 
 
 def set_up_tcp(sends, recvs, s_addr, remote_hostname,
@@ -374,23 +415,48 @@ tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
         print(e)
         sends.close()
 
-    # TODO: Transfer starts.
+    # Uses TCP connection to receive the HTML file, until FIN response.
     counter = 1  # DEBUG
+    html_doc = b""
     while True:
         packet, addr = recvs.recvfrom(_BUFFER_SIZE)
-        
-        # TODO: How to ensure complete packets are received?
-        # This seems no guaranteed for TCP, but the tutorial seems to assume it anyway.
-        # https://stackoverflow.com/questions/67509709/is-recvbufsize-guaranteed-to-receive-all-the-data-if-sended-data-is-smaller-th
 
         try:
-            (res, sequence, acknowledgement,
+            # Receives a HTTP GET reponse packet.
+            (res, tcp_receiver_seq, tcp_sender_seq,
             fin, syn, rst, psh, ack, urg, adv_window) = unpack_raw_http(packet, 
             parsed_url.hostname, s_addr, sends.getsockname()[1])
 
             print("Packet #" + str(counter) + ":")  # DEBUG
             counter += 1
+            html_doc += res
             print(res)
+
+            if fin == ack == 1 and syn == rst == urg == psh == 0:
+                print("FIN/ACK packet received!")
+                break
+            elif fin == 1:  # DEBUG
+                print("Error: FIN-only packet received")
+                break
+
+            # ACKs a received packet.
+            tcp_receiver_seq += 1
+            fin = syn = rst = psh = urg = 0
+            ack = 1
+            adv_window = min(adv_window, _DEFAULT_ADV_WINDOW)
+            data = ""
+            (packet, ip_id) = pack_raw_http(s_addr, d_addr, s_port, ip_id, 
+            tcp_sender_seq, tcp_receiver_seq, fin, syn, rst, psh, ack, urg,
+            adv_window, data)
+            try:
+                n = sends.sendto(packet, (d_addr, 0))
+
+                print(f"{n} bytes sent!")
+            except Exception as e:
+                print("Error: Failed to send ACK.")
+                print(e)
+                sends.close()
+
         # Checks if the packet is intended for other processes.
         except FilterRejectException:
             pass
@@ -399,6 +465,14 @@ tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
         except Exception as e:
             print("Error: Illegal response received!")
             print(e)
+
+    head_content_split = html_doc.split(b"\r\n\r\n")
+
+    if head_content_split[0].split(b" ")[1] != b"200":
+        print("Error: non-200 status code encounterd.")
+        exit(1)
+    
+    return (head_content_split[1], tcp_sender_seq, tcp_receiver_seq, ip_id)
 
 
 def main():
@@ -432,7 +506,7 @@ def main():
             # TODO: Add a 3-min timer for all receiving operations.
             # time_out_time = time.time() + 180
 
-            # Gets the IP address of local machine.
+            # Gets the local IP address and an available port number.
             try:
                 send_s.connect((socket.gethostbyname(url_hostname), 0))
             except Exception as e:
@@ -452,10 +526,13 @@ def main():
             ip_id) = raw_http_get(send_s, recv_s, parsed_url, s_addr,
             tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window)
 
-            # TODO: Convert 'raw_http_get_res' into HTML and save it.
+            tear_down_tcp(send_s, recv_s, parsed_url, s_addr,
+            tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window)
 
-            tear_down_tcp(send_s, recv_s, url_hostname,
-            tcp_sender_seq, tcp_receiver_seq, ip_id)
+            file_name = parsed_url.path.split("/")[-1]
+            file_name = file_name if file_name else "index.html"
+            with open(file_name, "wb") as file:
+                file.write(raw_http_get_res)
 
     return
 
