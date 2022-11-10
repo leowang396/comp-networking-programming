@@ -232,7 +232,7 @@ def unpack_raw_http(pckt, remote_hostname, local_addr, local_port_num):
     # IP-level unpacking.
     (version, ihl, iph_length, ip_id, ttl, protocol,
     s_addr, d_addr) = unpack_ip_head(pckt)
-    print("IP-level unpacking done!")
+    # print("IP-level unpacking done!")
 
     # IP-level filter for packets for this app.
     if (s_addr != socket.gethostbyname(remote_hostname)
@@ -266,9 +266,15 @@ def pack_raw_http(s_addr, d_addr, s_port, ip_id, tcp_seq_num, tcp_ack_num,
     tcp_seq_num, tcp_ack_num, tcp_fin, tcp_syn, tcp_rst, tcp_psh, tcp_ack, 
     tcp_urg, adv_window, data)
     print("====================")
-    print(ip_header.hex())
-    print(tcp_header.hex())
-    print(data.hex())
+    ip_hex = str(ip_header.hex())
+    ip_hex = " ".join([ip_hex[i:i+2] for i in range(0, len(ip_hex), 2)])
+    print("IP Header:\t" + ip_hex)
+    tcp_hex = str(tcp_header.hex())
+    tcp_hex = " ".join([tcp_hex[i:i+2] for i in range(0, len(tcp_hex), 2)])
+    print("TCP Header:\t" + tcp_hex)
+    data_hex = str(data.hex())
+    data_hex = " ".join([data_hex[i:i+2] for i in range(0, len(data_hex), 2)])
+    print("Data Payload:\t" + data_hex)
     print("====================")
 
     # Sequentially increments the IP identifier.
@@ -282,19 +288,19 @@ def tear_down_tcp(sends, recvs, remote_hostname, ip_id):
 def set_up_tcp(sends, recvs, s_addr, remote_hostname,
 ip_id, tcp_sender_seq, tcp_receiver_seq):
     d_addr = socket.gethostbyname(remote_hostname)
-    s_port = sends.getsockname()[1]
-    adv_window = _DEFAULT_ADV_WINDOW
+    s_port = 47632 # sends.getsockname()[1]
 
-    # Sends SYN packet.
+    # Sends the 1st SYN packet.
     data = ""
     fin = rst = psh = ack = urg = 0
     syn = 1
     (packet, ip_id) = pack_raw_http(s_addr, d_addr, s_port, ip_id,
-    tcp_sender_seq, tcp_receiver_seq, fin, syn, rst, psh, ack, urg, adv_window, 
-    data)
+    tcp_sender_seq, tcp_receiver_seq, fin, syn, rst, psh, ack, urg, 
+    _DEFAULT_ADV_WINDOW, data)
     try:
-        bytes_sent = sends.sendto(packet, (d_addr, 0))
-        print(str(bytes_sent) + " bytes sent!")
+        n = sends.sendto(packet, (d_addr, 0))
+
+        print(f"{n} bytes sent!")
     except:
         print("Error: Failed to send 1st SYN packet in the 3-way handshake.")
         sends.close()
@@ -303,14 +309,14 @@ ip_id, tcp_sender_seq, tcp_receiver_seq):
     while True:
         packet, _ = recvs.recvfrom(_BUFFER_SIZE)
         try:
-            # Note the exchange of sender and receiver seq num positions.
-            (_, tcp_receiver_seq, tcp_sender_seq, fin, syn, rst, psh, ack, urg, adv_window) = unpack_raw_http(packet, remote_hostname,
-            s_addr, s_port)
+            (_, tcp_receiver_seq, tcp_sender_seq,
+            fin, syn, rst, psh, ack, urg, adv_window) = unpack_raw_http(packet, 
+            remote_hostname, s_addr, s_port)
 
             if syn == ack == True and fin == rst == psh == urg == False:
                 print("Received valid SYN/ACK")
             else:
-                print("Error: SYN/ACK invalid!")
+                raise ValueError("Invalid SYN/ACK response!")
             break
         # Checks if the packet is intended for other processes.
         except FilterRejectException:
@@ -319,7 +325,7 @@ ip_id, tcp_sender_seq, tcp_receiver_seq):
         # TODO: Add such checks.
         except Exception as e:
             print("Error: Illegal response received!")
-            print(e)
+            print(repr(e))
     
     # Sends the last ACK to complete three-way handshake.
     data = ""
@@ -329,21 +335,22 @@ ip_id, tcp_sender_seq, tcp_receiver_seq):
     (packet, ip_id) = pack_raw_http(s_addr, d_addr, s_port, ip_id,
     tcp_sender_seq, tcp_receiver_seq, fin, syn, rst, psh, ack, urg, 
     min(adv_window, _DEFAULT_ADV_WINDOW), data)
-    # print("Packet:")
-    # print(packet.hex())
     try:
-        bytes_sent = sends.send(packet)
-        print(str(bytes_sent) + " bytes sent!")
+        n = sends.sendto(packet, (d_addr, 0))
+
+        print(f"{n} bytes sent!")
     except:
         print("Error: Failed to send last SYN packet in the 3-way handshake.")
         sends.close()
 
-    # TODO: Check the validity of sequence numbers here.
-    return (tcp_sender_seq + 1, tcp_receiver_seq, ip_id)
+    return (tcp_sender_seq, tcp_receiver_seq, ip_id)
 
 
-def raw_http_get(sends, recvs, remote_hostname,
+def raw_http_get(sends, recvs, remote_hostname, s_addr,
 tcp_sender_seq, tcp_receiver_seq, ip_id):
+    # TODO: Send a HTTP GET request.
+
+    # TODO: Transfer starts.
     counter = 1  # DEBUG
     while True:
         packet, addr = recvs.recvfrom(_BUFFER_SIZE)
@@ -353,10 +360,13 @@ tcp_sender_seq, tcp_receiver_seq, ip_id):
         # https://stackoverflow.com/questions/67509709/is-recvbufsize-guaranteed-to-receive-all-the-data-if-sended-data-is-smaller-th
 
         try:
-            filter_flag, ip_header_list, pckt_no_ip = unpack_raw_http(packet, remote_hostname, sends.getsockname()[1])
+            (res, sequence, acknowledgement,
+            fin, syn, rst, psh, ack, urg, adv_window) = unpack_raw_http(packet, 
+            remote_hostname, s_addr, sends.getsockname()[1])
 
             print("Packet #" + str(counter) + ":")  # DEBUG
             counter += 1
+            print(res)
         # Checks if the packet is intended for other processes.
         except FilterRejectException:
             pass
@@ -401,11 +411,9 @@ def main():
             # Gets the IP address of local machine.
             try:
                 send_s.connect((socket.gethostbyname(url_hostname), 0))
-                s_addr = send_s.getsockname()[0]
             except Exception as e:
-                s_addr = '127.0.0.1'
-
-            # s_addr = '192.168.1.240' # Hard-code
+                print(e)
+            s_addr = send_s.getsockname()[0]
 
             # Randomly picks the first seq num.
             tcp_sender_seq = random.randint(0, 2**31)
@@ -417,14 +425,14 @@ def main():
             _INIT_IP_ID, tcp_sender_seq, tcp_receiver_seq)
 
             (raw_http_get_res, tcp_sender_seq, tcp_receiver_seq,
-            ip_id) = raw_http_get(send_s, recv_s, url_hostname,
+            ip_id) = raw_http_get(send_s, recv_s, url_hostname, s_addr,
             tcp_sender_seq, tcp_receiver_seq, ip_id)
 
             # TODO: Convert 'raw_http_get_res' into HTML and save it.
 
             tear_down_tcp(send_s, recv_s, url_hostname,
             tcp_sender_seq, tcp_receiver_seq, ip_id)
-    
+
     return
 
 
