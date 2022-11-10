@@ -42,7 +42,12 @@ def checksum(msg):
     # loop taking 2 characters at a time
     for i in range(0, len(msg), 2):
         # in python3, b"abc"[1] = 98. so no need for ord()
-        w = msg[i] + (msg[i+1] << 8)
+        w = msg[i]
+        # If a segment contains an odd number of header and text octets to be 
+        # checksummed, the last octet is padded on the right with zeros to form 
+        # a 16 bit word for checksum purposes.
+        if (i + 1) < len(msg):
+            w += (msg[i+1] << 8)
         s = s + w
     
     s = (s >> 16) + (s & 0xffff)
@@ -288,7 +293,7 @@ def tear_down_tcp(sends, recvs, remote_hostname, ip_id):
 def set_up_tcp(sends, recvs, s_addr, remote_hostname,
 ip_id, tcp_sender_seq, tcp_receiver_seq):
     d_addr = socket.gethostbyname(remote_hostname)
-    s_port = 47632 # sends.getsockname()[1]
+    s_port = sends.getsockname()[1]
 
     # Sends the 1st SYN packet.
     data = ""
@@ -332,9 +337,10 @@ ip_id, tcp_sender_seq, tcp_receiver_seq):
     fin = syn = rst = psh = urg = 0
     ack = 1
     tcp_receiver_seq += 1
+    adv_window = min(adv_window, _DEFAULT_ADV_WINDOW)
     (packet, ip_id) = pack_raw_http(s_addr, d_addr, s_port, ip_id,
     tcp_sender_seq, tcp_receiver_seq, fin, syn, rst, psh, ack, urg, 
-    min(adv_window, _DEFAULT_ADV_WINDOW), data)
+    adv_window, data)
     try:
         n = sends.sendto(packet, (d_addr, 0))
 
@@ -343,12 +349,30 @@ ip_id, tcp_sender_seq, tcp_receiver_seq):
         print("Error: Failed to send last SYN packet in the 3-way handshake.")
         sends.close()
 
-    return (tcp_sender_seq, tcp_receiver_seq, ip_id)
+    return (tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window)
 
 
-def raw_http_get(sends, recvs, remote_hostname, s_addr,
-tcp_sender_seq, tcp_receiver_seq, ip_id):
-    # TODO: Send a HTTP GET request.
+def raw_http_get(sends, recvs, parsed_url, s_addr,
+tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
+    d_addr = socket.gethostbyname(parsed_url.hostname)
+    s_port = sends.getsockname()[1]
+    data = "".join(["GET ", parsed_url.path, " HTTP/1.1", "\r\n",
+    "Host: ", parsed_url.hostname, "\r\n\r\n"])
+
+    fin = syn = rst = urg = 0
+    psh = ack = 1
+    (packet, ip_id) = pack_raw_http(s_addr, d_addr, s_port, ip_id, 
+    tcp_sender_seq, tcp_receiver_seq, fin, syn, rst, psh, ack, urg,
+    adv_window, data)
+
+    try:
+        n = sends.sendto(packet, (d_addr, 0))
+
+        print(f"{n} bytes sent!")
+    except Exception as e:
+        print("Error: Failed to send GET request.")
+        print(e)
+        sends.close()
 
     # TODO: Transfer starts.
     counter = 1  # DEBUG
@@ -362,7 +386,7 @@ tcp_sender_seq, tcp_receiver_seq, ip_id):
         try:
             (res, sequence, acknowledgement,
             fin, syn, rst, psh, ack, urg, adv_window) = unpack_raw_http(packet, 
-            remote_hostname, s_addr, sends.getsockname()[1])
+            parsed_url.hostname, s_addr, sends.getsockname()[1])
 
             print("Packet #" + str(counter) + ":")  # DEBUG
             counter += 1
@@ -420,13 +444,13 @@ def main():
             # SYN packet is the first packet in this connection.
             tcp_receiver_seq = 0
 
-            (tcp_sender_seq, tcp_receiver_seq, ip_id) = set_up_tcp(send_s, 
-            recv_s, s_addr, url_hostname,
-            _INIT_IP_ID, tcp_sender_seq, tcp_receiver_seq)
+            (tcp_sender_seq, tcp_receiver_seq,
+            ip_id, adv_window) = set_up_tcp(send_s, recv_s, s_addr, 
+            url_hostname, _INIT_IP_ID, tcp_sender_seq, tcp_receiver_seq)
 
             (raw_http_get_res, tcp_sender_seq, tcp_receiver_seq,
-            ip_id) = raw_http_get(send_s, recv_s, url_hostname, s_addr,
-            tcp_sender_seq, tcp_receiver_seq, ip_id)
+            ip_id) = raw_http_get(send_s, recv_s, parsed_url, s_addr,
+            tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window)
 
             # TODO: Convert 'raw_http_get_res' into HTML and save it.
 
