@@ -1,8 +1,18 @@
-#! /usr/bin/env python3
+#!/usr/bin/env python3
 
 """
 Project 3: Raw Sockets
+
+The script allows the user to HTTP GET from a given URL. It uses raw sockets 
+and custom TCP/IP protocols to communicate and retrieve data from the URL. The
+script then writes the response message to a local file based on the URL. 
+Assumes HTTP 1.1, TCP, IPv4.
+
+The script is intended to be executed directly from the command line, 
+using the command:
+./rawhttpget [URL]
 """
+
 import random
 import sys
 import socket
@@ -235,24 +245,20 @@ def unpack_raw_http(pckt, remote_hostname, local_addr, local_port_num):
     # IP-level unpacking.
     (version, ihl, iph_length, ip_id, ttl, protocol,
     s_addr, d_addr) = unpack_ip_head(pckt)
-    # print("IP-level unpacking done!")
 
     # IP-level filter for packets received by this application.
     if (s_addr != socket.gethostbyname(remote_hostname)
     or d_addr != local_addr):
         raise FilterRejectException
-    print("IP-level filtering done!")
 
     # TCP-level unpacking.
     (source_port, dest_port, sequence, acknowledgement, tcph_length,
     fin, syn, rst, psh, ack, urg,
     adv_window, checksum) = unpack_tcp_head(pckt[iph_length:])
-    print("TCP-level unpacking done!")
 
     # TCP-level filter for packets received by this application.
     if local_port_num != dest_port:
         raise FilterRejectException
-    print("TCP-level filtering done!")
 
     return (pckt[(iph_length + tcph_length):], sequence, acknowledgement,
     fin, syn, rst, psh, ack, urg, adv_window)
@@ -451,7 +457,8 @@ tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
     """
     d_addr = socket.gethostbyname(parsed_url.hostname)
     s_port = sends.getsockname()[1]
-    data = "".join(["GET ", parsed_url.path, " HTTP/1.1", "\r\n",
+    path = parsed_url.path if parsed_url.path else "/"
+    data = "".join(["GET ", path, " HTTP/1.1", "\r\n",
     "Host: ", parsed_url.hostname, "\r\n\r\n"])
 
     fin = syn = rst = urg = 0
@@ -525,8 +532,37 @@ tcp_sender_seq, tcp_receiver_seq, ip_id, adv_window):
 
     if head_content_split[0].split(b" ")[1] != b"200":
         exit(1)
-    
+
+    temp = head_content_split[0].split(b"Transfer-Encoding:", 1)
+    if len(temp) > 1:
+        temp = temp[1].split(b"\r\n", 1)
+        if b"chunked" in temp[0]:
+            head_content_split[1] = remove_chunk_info(head_content_split[1])
+
     return (head_content_split[1], tcp_sender_seq, tcp_receiver_seq, ip_id)
+
+
+def remove_chunk_info(input):
+    """
+    Removes the chunked HTTP protocol info from data.
+
+    Args:
+        A bytes object representing data with chunked info
+
+    Returns:
+        A bytes object representing processed data.
+    """
+
+    res = b''
+    while len(input) > 0 and input[0] != b'0':
+        temp = input.split(b"\r\n", 1)
+        length = int(temp[0].split(b";")[0], 16)
+        input = temp[1]
+
+        res += input[:length]
+        input = input[(length + 2):]
+
+    return res
 
 
 def main():
